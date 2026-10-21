@@ -84,6 +84,7 @@ runs:
         container_name       = "${TF_STATE_CONTAINER}"
         key                  = "${STATE_KEY}"
         use_oidc             = true
+        use_azuread_auth     = true
         EOF
 
     - name: Init

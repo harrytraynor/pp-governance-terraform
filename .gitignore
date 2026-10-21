@@ -17,6 +17,12 @@ plan.txt
 plan-*.txt
 tfplan
 *.tfplan
+*.tfplan.json
+*.out
+
+# Local secrets. Never commit these.
+.env
+*.env
 
 # Variable files can hold tenant ids. Commit only the examples.
 *.tfvars

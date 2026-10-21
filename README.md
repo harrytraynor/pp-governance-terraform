@@ -129,7 +129,7 @@ export USER_ASSIGNEE_OBJECT_ID=YOUR-USER-OBJECT-ID   # optional, for local CLI r
 ./scripts/bootstrap-state.sh
 ```
 
-`ASSIGNEE_OBJECT_ID` is the enterprise application object id. The script grants that principal **Storage Blob Data Contributor**, and grants the same role to `USER_ASSIGNEE_OBJECT_ID` when it is set. It does not delete anything. Azure enforces MFA on resource writes, so the CLI session that runs the script must be an MFA sign-in.
+`ASSIGNEE_OBJECT_ID` is the enterprise application object id. The script grants that principal **Storage Blob Data Contributor**, and grants the same role to `USER_ASSIGNEE_OBJECT_ID` when it is set. It does not delete anything. Azure enforces MFA on resource writes, so the CLI session that runs the script must be an MFA sign-in. Set `USER_ASSIGNEE_OBJECT_ID` to your own user object id: after shared keys are off, the container is created with `--auth-mode login` as you.
 
 In each of `stacks/tenant`, `stacks/groups`, and `stacks/lanes`:
 
@@ -137,7 +137,11 @@ In each of `stacks/tenant`, `stacks/groups`, and `stacks/lanes`:
 cp backend.hcl.example backend.hcl
 ```
 
-Edit the three files. The keys are already `tenant.tfstate`, `groups.tfstate`, and `lanes.tfstate`. Set `use_oidc = false` for a CLI sign-in, or leave `use_oidc = true` when the Azure CLI session is itself a federated identity.
+Edit the three files. The keys are already `tenant.tfstate`, `groups.tfstate`, and `lanes.tfstate`. Set `use_oidc = false` for a CLI sign-in, or leave `use_oidc = true` when the Azure CLI session is itself a federated identity. Keep `use_azuread_auth = true`: the script disables shared key access, so the backend cannot fall back to account keys.
+
+The script hardens the account: shared key and SAS access off, TLS 1.2 minimum, HTTPS only, no public blob access, blob versioning, and 14-day blob and container soft delete (`SOFT_DELETE_DAYS`). It grants Storage Blob Data Contributor on the account, then creates the container with `--auth-mode login`, retrying for up to `RBAC_WAIT_SECONDS` (default 600) while the role propagates.
+
+For a local run where the Power Platform and Azure AD providers sign in as the service principal with a client secret but the backend uses your CLI sign-in, leave `ARM_CLIENT_ID` unset: the backend only uses `ARM_CLIENT_SECRET` when a client id is also set. Pass the client id to the providers with `TF_VAR_client_id` instead.
 
 **Local state (fastest first plan).** In each stack's `versions.tf`, change `backend "azurerm" {}` to `backend "local" {}`. Do not commit that edit. After you change it, `terraform init -reconfigure`.
 
@@ -369,7 +373,7 @@ This repo is a learning example that goes with a blog post. It has been applied 
 2. **Pull request plans run as that admin identity.** The `pull_request` federated credential lets any branch in this repository, once it has an open pull request, obtain an admin token during plan. Providers and external data sources can run code during a plan. Use a separate read-only identity for plan, and keep the admin credential on the `production` GitHub environment only.
 3. **The `production` GitHub environment needs protection rules.** Apply jobs set `environment: production`, which selects the `repo:ORG/REPO:environment:production` credential. This repository does not configure required reviewers or a deployment branch rule. Add required reviewers, and limit deployments to `main`. Without those rules the environment name is only a label.
 4. **Protect `main`.** Require a pull request review and the passing checks, and block force pushes. A push to `main` runs apply, so it has the same reach as the tenant admin identity.
-5. **State storage.** Terraform state can hold environment ids, Dataverse URLs, and group object ids. `scripts/bootstrap-state.sh` creates a StorageV2 account (Standard_LRS, TLS 1.2, blob public access disabled), a private container, and **Storage Blob Data Contributor** on the whole account for the pipeline service principal. If `USER_ASSIGNEE_OBJECT_ID` is set, that user gets the same role. The script does not disable shared key access (Azure leaves it enabled), and it does not turn on blob versioning or soft delete. Prefer Entra-only auth with shared key access disabled, versioning, soft delete, and RBAC limited to the pipeline identity and named admins.
+5. **State storage.** Terraform state can hold environment ids, Dataverse URLs, and group object ids. `scripts/bootstrap-state.sh` now disables shared key access and enables blob versioning and soft delete (14 days for blobs and containers). It also sets TLS 1.2, HTTPS only, and no public blob access, then grants **Storage Blob Data Contributor** on the whole account to the pipeline service principal and, when set, one user. The backend examples and CI set `use_azuread_auth = true` so Terraform uses Entra ID. The role is still read and write on the whole account. Narrow it to named admins if more people should not read state.
 6. **Avoid long-lived client secrets.** The workflows use OIDC and this repo commits no client secret. For a local run, prefer `az login` (`use_cli = true`). If you create a client secret to get unstuck, delete it when the run is done.
 7. **Supply chain.** GitHub Actions are pinned to tags, not commit SHAs: `actions/checkout@v4`, `hashicorp/setup-terraform@v3`, `azure/login@v2`, `actions/github-script@v7`, and `actions/upload-artifact@v4`. Pin those actions to SHAs before you trust the workflows with a real tenant. Terraform lock files are already committed for `stacks/tenant`, `stacks/groups`, `stacks/lanes`, `examples/register-admin-application`, and `examples/tenant-isolation`.
 8. **Keep drift plan-only and read-only.** `drift.yml` runs `terraform plan -detailed-exitcode` and opens or closes an issue. It does not apply. It still authenticates as the same admin app, with the `ref:refs/heads/main` credential. Leave the workflow on plan, and move it to a read-only identity.

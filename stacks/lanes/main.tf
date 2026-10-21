@@ -60,6 +60,7 @@ data "terraform_remote_state" "groups" {
     container_name       = var.backend_container_name
     key                  = "groups.tfstate"
     use_oidc             = var.use_oidc
+    use_azuread_auth     = true
   }
 }
 
