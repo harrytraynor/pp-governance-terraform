@@ -39,28 +39,6 @@ variable "manage_default_environment_dlp" {
   default     = false
 }
 
-variable "manage_tenant_isolation" {
-  type        = bool
-  description = "Manage the tenant isolation policy. Leave false until you intend to change cross-tenant connections."
-  default     = false
-}
-
-variable "tenant_isolation_disabled" {
-  type        = bool
-  description = "When isolation is managed, true stores the policy in a disabled state."
-  default     = true
-}
-
-variable "tenant_isolation_allowed_tenants" {
-  type = list(object({
-    tenant_id = string
-    inbound   = bool
-    outbound  = bool
-  }))
-  description = "Tenants allowed through isolation. Ignored unless manage_tenant_isolation is true."
-  default     = []
-}
-
 variable "environment_routing_target_group_id" {
   type        = string
   description = "Sandbox (or other) environment group id. When set, default-environment routing is switched on and new makers are sent there. Apply the groups stack first."

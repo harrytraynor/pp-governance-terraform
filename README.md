@@ -21,10 +21,11 @@ This repository is a smaller cut of that idea, limited to what the official `mic
 | `modules/lane` | Security group, environment, optional managed-environment settings, application user, and security role. |
 | `modules/data-policy` | A block-by-default data policy scoped to specific environments. |
 | `modules/tenant-baseline` | The tenant settings resource. |
-| `stacks/tenant` | Tenant settings, and optional default-environment data policy and tenant isolation. Own state. |
+| `stacks/tenant` | Tenant settings, and an optional default-environment data policy. Own state. |
 | `stacks/groups` | One environment group per tier file. Own state. |
 | `stacks/lanes` | Dev environments for every lane, optional test and production, and one data policy per tier that has a lane. Own state. |
 | `examples/register-admin-application` | One-shot registration of the service principal. A person runs it. The service principal cannot register itself. |
+| `examples/tenant-isolation` | Optional cross-tenant isolation policy. Separate from the tenant stack. Workflows do not apply it. |
 | `scripts/` | Lane checks, a local validate script, and state-storage bootstrap. |
 | `.github/workflows/` | Plan on pull request, apply on merge to `main`, nightly drift check. |
 
@@ -142,7 +143,7 @@ terraform init -input=false -backend-config=backend.hcl
 terraform plan
 ```
 
-Leave `manage_default_environment_dlp` and `manage_tenant_isolation` false for this plan. Routing stays off until `environment_routing_target_group_id` is set, and that id does not exist until the groups stack has been applied.
+Leave `manage_default_environment_dlp` false for this plan. Routing stays off until `environment_routing_target_group_id` is set, and that id does not exist until the groups stack has been applied. Cross-tenant isolation is a separate example, described under known limitations, and this plan does not touch it.
 
 Read the plan. It changes tenant settings listed in `tenant/baseline.yaml`. Destroy later restores the values Terraform recorded at create. It does not delete the tenant.
 
@@ -322,7 +323,8 @@ Checked against provider **4.2.1**. Where the provider has no resource, this rep
 - An empty `member_object_ids` list means nobody is in the security group. If Dataverse refuses the pipeline caller, set `pipeline_security_group_object_id` to the enterprise application **object** id so it is added as a member.
 - Adoption of an existing application user is ownership. Destroy deletes that user.
 - Tenant settings destroy restores the snapshot from create. Deprecated settings (`disable_survey_feedback`, `disable_nps_comments_reachout`, `disable_create_from_image`, `disable_create_from_figma`, `enable_open_ai_bot_publishing`) are left unset on purpose.
-- Default-environment data policy and tenant isolation stay off until you set the flags. The default-environment policy is `OnlyEnvironments` on the environment whose type is `Default`.
+- The default-environment data policy stays off until `manage_default_environment_dlp` is true. It is `OnlyEnvironments` on the environment whose type is `Default`.
+- `powerplatform_tenant_isolation_policy` is a real resource, and it is not in the tenant stack. Provider 4.2.1 fails `terraform validate` when `allowed_tenants` is unknown, which is what a variable or a `count` of zero produces during validate. `examples/tenant-isolation` keeps `is_disabled = true` and an empty allow list as literals. Edit those arguments and apply that root on its own when you intend to manage cross-tenant isolation. Read the plan first. The GitHub workflows do not apply it.
 
 ## Formatting
 

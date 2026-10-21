@@ -18,6 +18,7 @@ roots=(
   "${root}/stacks/groups"
   "${root}/stacks/lanes"
   "${root}/examples/register-admin-application"
+  "${root}/examples/tenant-isolation"
 )
 
 for dir in "${roots[@]}"; do

@@ -58,13 +58,6 @@ module "default_environment_dlp" {
   custom_connectors_data_group = local.baseline.default_environment_dlp.custom_connectors_data_group
 }
 
-resource "powerplatform_tenant_isolation_policy" "this" {
-  count = var.manage_tenant_isolation ? 1 : 0
-
-  is_disabled     = var.tenant_isolation_disabled
-  allowed_tenants = var.tenant_isolation_allowed_tenants
-}
-
 resource "terraform_data" "default_environment_present" {
   count = var.manage_default_environment_dlp ? 1 : 0
 
