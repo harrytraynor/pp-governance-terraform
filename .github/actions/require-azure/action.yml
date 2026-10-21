@@ -1,0 +1,51 @@
+name: Require Azure configuration
+description: Record whether repository variables are set so plan, apply, and drift can be skipped.
+
+inputs:
+  azure_client_id:
+    description: AZURE_CLIENT_ID repository variable
+    required: true
+  azure_tenant_id:
+    description: AZURE_TENANT_ID repository variable
+    required: true
+  azure_subscription_id:
+    description: AZURE_SUBSCRIPTION_ID repository variable
+    required: true
+  tf_state_resource_group:
+    description: TF_STATE_RESOURCE_GROUP repository variable
+    required: true
+  tf_state_storage_account:
+    description: TF_STATE_STORAGE_ACCOUNT repository variable
+    required: true
+  tf_state_container:
+    description: TF_STATE_CONTAINER repository variable
+    required: true
+  power_platform_location:
+    description: POWER_PLATFORM_LOCATION repository variable
+    required: true
+  power_platform_macro_region:
+    description: POWER_PLATFORM_MACRO_REGION repository variable
+    required: true
+
+outputs:
+  ready:
+    description: true when plan, apply, and drift should sign in
+    value: ${{ steps.check.outputs.ready }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check repository variables
+      id: check
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        AZURE_CLIENT_ID: ${{ inputs.azure_client_id }}
+        AZURE_TENANT_ID: ${{ inputs.azure_tenant_id }}
+        AZURE_SUBSCRIPTION_ID: ${{ inputs.azure_subscription_id }}
+        TF_STATE_RESOURCE_GROUP: ${{ inputs.tf_state_resource_group }}
+        TF_STATE_STORAGE_ACCOUNT: ${{ inputs.tf_state_storage_account }}
+        TF_STATE_CONTAINER: ${{ inputs.tf_state_container }}
+        POWER_PLATFORM_LOCATION: ${{ inputs.power_platform_location }}
+        POWER_PLATFORM_MACRO_REGION: ${{ inputs.power_platform_macro_region }}
+      run: ./scripts/check-github-config.sh

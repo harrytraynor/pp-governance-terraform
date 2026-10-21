@@ -11,6 +11,24 @@ inputs:
   command:
     description: plan, apply, or drift
     required: true
+  azure_client_id:
+    description: Application (client) id passed in by the workflow
+    required: true
+  azure_tenant_id:
+    description: Entra tenant id passed in by the workflow
+    required: true
+  azure_subscription_id:
+    description: Subscription id passed in by the workflow
+    required: true
+  tf_state_resource_group:
+    description: State resource group passed in by the workflow
+    required: true
+  tf_state_storage_account:
+    description: State storage account passed in by the workflow
+    required: true
+  tf_state_container:
+    description: State container passed in by the workflow
+    required: true
 
 outputs:
   exit_code:
@@ -23,9 +41,9 @@ runs:
     - name: Sign in to Azure
       uses: azure/login@v2
       with:
-        client-id: ${{ vars.AZURE_CLIENT_ID }}
-        tenant-id: ${{ vars.AZURE_TENANT_ID }}
-        subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        client-id: ${{ inputs.azure_client_id }}
+        tenant-id: ${{ inputs.azure_tenant_id }}
+        subscription-id: ${{ inputs.azure_subscription_id }}
 
     - name: Set up Terraform
       uses: hashicorp/setup-terraform@v3
@@ -55,9 +73,9 @@ runs:
       working-directory: stacks/${{ inputs.stack }}
       env:
         STATE_KEY: ${{ inputs.state_key }}
-        TF_STATE_RESOURCE_GROUP: ${{ vars.TF_STATE_RESOURCE_GROUP }}
-        TF_STATE_STORAGE_ACCOUNT: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
-        TF_STATE_CONTAINER: ${{ vars.TF_STATE_CONTAINER }}
+        TF_STATE_RESOURCE_GROUP: ${{ inputs.tf_state_resource_group }}
+        TF_STATE_STORAGE_ACCOUNT: ${{ inputs.tf_state_storage_account }}
+        TF_STATE_CONTAINER: ${{ inputs.tf_state_container }}
       run: |
         set -euo pipefail
         cat > backend.hcl <<EOF

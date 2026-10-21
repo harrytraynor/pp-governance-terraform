@@ -209,11 +209,15 @@ Workflows:
 
 | Workflow | When | What |
 | --- | --- | --- |
-| `plan.yml` | Every pull request, and `workflow_dispatch` | Format, validate, lane checks, then `terraform plan` for each stack. The plan is posted as a pull request comment and kept up to date. |
-| `apply.yml` | Push to `main` that touches modules, stacks, tiers, lanes, tenant, or the workflow itself, and `workflow_dispatch` | Apply tenant, then groups, then lanes. Each job uses the GitHub environment `production`. |
-| `drift.yml` | 02:00 UTC, and `workflow_dispatch` | `terraform plan -detailed-exitcode`. Exit code 2 opens or updates an issue titled `Drift in stacks/<stack>`. Exit code 0 closes that issue when the plan is clean again. Any other exit code fails the job. |
+| `plan.yml` | Every pull request, and `workflow_dispatch` | Format, validate, and lane checks. When Azure variables are set, `terraform plan` for each stack, posted as a pull request comment. |
+| `apply.yml` | Push to `main` that touches modules, stacks, tiers, lanes, tenant, or the workflow itself, and `workflow_dispatch` | When Azure variables are set, apply tenant, then groups, then lanes. Each apply job uses the GitHub environment `production`. |
+| `drift.yml` | 02:00 UTC, and `workflow_dispatch` | When Azure variables are set, `terraform plan -detailed-exitcode`. Exit code 2 opens or updates an issue titled `Drift in stacks/<stack>`. Exit code 0 closes that issue when the plan is clean again. Any other exit code fails the job. |
 
 Plan comments are marked `<!-- pp-governance-plan:STACK -->` and truncated at 60,000 characters.
+
+Composite actions cannot read repository variables. The workflows pass `vars.*` into `.github/actions/terraform` and `.github/actions/require-azure` as inputs.
+
+Until the required variables below are set, each workflow's Azure configuration job stays green and writes a job summary that lists what is missing. The tenant, groups, and lanes jobs are skipped, so the check is not red. Format and validate still run on every pull request. A federated credential is not tested until those variables exist. After they do, a missing credential fails the Azure login step. Setting both geography variables, or neither of them, also skips the Azure jobs with the same notice.
 
 ### Federated credentials
 
@@ -241,7 +245,7 @@ Repository **variables**, not secrets. The workflows never read a client secret.
 | `TF_STATE_RESOURCE_GROUP` | yes | State resource group. |
 | `TF_STATE_STORAGE_ACCOUNT` | yes | State storage account. |
 | `TF_STATE_CONTAINER` | yes | State container. |
-| `POWER_PLATFORM_LOCATION` | one of these two | Geography, for example `europe`. The lanes plan fails if both are set or neither is set. |
+| `POWER_PLATFORM_LOCATION` | one of these two | Geography, for example `europe`. The Azure jobs skip until exactly one of these is set. |
 | `POWER_PLATFORM_MACRO_REGION` | one of these two | For example `eu-efta`. |
 | `PIPELINE_APPLICATION_ID` | no | Client id added as an application user. Defaults to `AZURE_CLIENT_ID`. |
 | `NAME_PREFIX` | no | Defaults to `ppgov`. |

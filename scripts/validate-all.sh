@@ -10,6 +10,7 @@ fi
 
 python3 "${root}/scripts/check-lanes.py" --self-test
 python3 "${root}/scripts/check-lanes.py" --root "${root}"
+bash "${root}/scripts/check-github-config.sh" --self-test
 
 terraform fmt -check -recursive "${root}"
 

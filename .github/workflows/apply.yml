@@ -22,8 +22,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  config:
+    name: Azure configuration
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      ready: ${{ steps.azure.outputs.ready }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Check repository variables
+        id: azure
+        uses: ./.github/actions/require-azure
+        with:
+          azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          tf_state_resource_group: ${{ vars.TF_STATE_RESOURCE_GROUP }}
+          tf_state_storage_account: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+          tf_state_container: ${{ vars.TF_STATE_CONTAINER }}
+          power_platform_location: ${{ vars.POWER_PLATFORM_LOCATION }}
+          power_platform_macro_region: ${{ vars.POWER_PLATFORM_MACRO_REGION }}
+
   tenant:
     name: Apply tenant
+    needs: config
+    if: needs.config.outputs.ready == 'true'
     runs-on: ubuntu-latest
     environment: production
     permissions:
@@ -52,10 +78,19 @@ jobs:
           stack: tenant
           state_key: tenant.tfstate
           command: apply
+          azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          tf_state_resource_group: ${{ vars.TF_STATE_RESOURCE_GROUP }}
+          tf_state_storage_account: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+          tf_state_container: ${{ vars.TF_STATE_CONTAINER }}
 
   groups:
     name: Apply groups
-    needs: tenant
+    needs:
+      - config
+      - tenant
+    if: needs.config.outputs.ready == 'true' && needs.tenant.result == 'success'
     runs-on: ubuntu-latest
     environment: production
     permissions:
@@ -81,10 +116,19 @@ jobs:
           stack: groups
           state_key: groups.tfstate
           command: apply
+          azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          tf_state_resource_group: ${{ vars.TF_STATE_RESOURCE_GROUP }}
+          tf_state_storage_account: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+          tf_state_container: ${{ vars.TF_STATE_CONTAINER }}
 
   lanes:
     name: Apply lanes
-    needs: groups
+    needs:
+      - config
+      - groups
+    if: needs.config.outputs.ready == 'true' && needs.groups.result == 'success'
     runs-on: ubuntu-latest
     environment: production
     permissions:
@@ -117,3 +161,9 @@ jobs:
           stack: lanes
           state_key: lanes.tfstate
           command: apply
+          azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          tf_state_resource_group: ${{ vars.TF_STATE_RESOURCE_GROUP }}
+          tf_state_storage_account: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+          tf_state_container: ${{ vars.TF_STATE_CONTAINER }}
