@@ -63,9 +63,14 @@ resource "powerplatform_environment" "this" {
 
   # prevent_destroy must be a literal. Changing location or macro_region forces
   # replacement, and this stops a typo from planning that replacement.
+  # owner_id is only used at create time for Developer environments; changing it
+  # would force a replace, so later edits (or the placeholder in the public
+  # example lanes) are ignored, and you transfer ownership in the admin centre
+  # instead.
   # To destroy the environment, delete this lifecycle block, review the plan, and apply.
   lifecycle {
     prevent_destroy = true
+    ignore_changes  = [owner_id]
 
     precondition {
       condition     = (var.location != null && var.macro_region == null) || (var.location == null && var.macro_region != null)
