@@ -263,21 +263,42 @@ module "dedicated_prod" {
   environment_group_id            = local.group_ids[each.value.tier]
 }
 
+# Personal developer environments created by routing are not resources in this
+# state. The next lanes apply adds every environment currently in the Sandbox
+# group to that tier's data policy. Provider 4.2.1 scopes a policy to environment
+# ids, not to a group, so a brand-new routed environment waits for this apply.
+data "powerplatform_environments" "catalogue" {
+  count = try(local.group_ids["sandbox"], "") != "" ? 1 : 0
+}
+
 locals {
+  sandbox_group_environment_ids = length(data.powerplatform_environments.catalogue) == 0 ? [] : [
+    for env in data.powerplatform_environments.catalogue[0].environments : env.id
+    if env.environment_group_id == local.group_ids["sandbox"]
+  ]
+
+  dlp_tiers = setunion(
+    local.lane_tiers,
+    length(local.sandbox_group_environment_ids) > 0 ? toset(["sandbox"]) : toset([]),
+  )
+
   environment_ids_by_tier = {
-    for tier_name in local.lane_tiers : tier_name => concat(
-      [for name, env in module.dev : env.environment_id if local.lanes[name].tier == tier_name],
-      [for name, env in module.shared_test : env.environment_id if name == tier_name],
-      [for name, env in module.shared_prod : env.environment_id if name == tier_name],
-      [for name, env in module.dedicated_test : env.environment_id if local.lanes[name].tier == tier_name],
-      [for name, env in module.dedicated_prod : env.environment_id if local.lanes[name].tier == tier_name],
-    )
+    for tier_name in local.dlp_tiers : tier_name => distinct(concat(
+      contains(local.lane_tiers, tier_name) ? concat(
+        [for name, env in module.dev : env.environment_id if local.lanes[name].tier == tier_name],
+        [for name, env in module.shared_test : env.environment_id if name == tier_name],
+        [for name, env in module.shared_prod : env.environment_id if name == tier_name],
+        [for name, env in module.dedicated_test : env.environment_id if local.lanes[name].tier == tier_name],
+        [for name, env in module.dedicated_prod : env.environment_id if local.lanes[name].tier == tier_name],
+      ) : [],
+      tier_name == "sandbox" ? local.sandbox_group_environment_ids : [],
+    ))
   }
 }
 
 module "dlp" {
   source   = "../../modules/data-policy"
-  for_each = local.lane_tiers
+  for_each = local.dlp_tiers
 
   create                       = length(local.environment_ids_by_tier[each.key]) > 0
   display_name                 = "${var.name_prefix}-tier-${each.key}"

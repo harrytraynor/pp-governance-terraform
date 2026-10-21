@@ -14,6 +14,12 @@ name_prefix = "ppgov"
 # that applies only to the default environment.
 manage_default_environment_dlp = false
 
-# Set this to the sandbox group id from `terraform -chdir=stacks/groups output`
-# after the groups stack has been applied. Routing stays off until it is set.
+# Routing stays off. After groups has been applied, either set the flag and the
+# three backend names (the same values as backend.hcl) so this stack reads the
+# sandbox group id, or paste that id below. New makers only.
+route_new_makers_to_sandbox = false
+# environment_routing_all_makers = false
 # environment_routing_target_group_id = "00000000-0000-0000-0000-000000000000"
+# backend_resource_group_name  = "rg-REPLACE-tfstate"
+# backend_storage_account_name = "stREPLACE"
+# backend_container_name       = "tfstate"

@@ -63,6 +63,10 @@ jobs:
       TF_VAR_manage_default_environment_dlp: ${{ vars.MANAGE_DEFAULT_ENVIRONMENT_DLP || 'false' }}
       TF_VAR_name_prefix: ${{ vars.NAME_PREFIX || 'ppgov' }}
       TF_VAR_environment_routing_target_group_id: ${{ vars.ENVIRONMENT_ROUTING_TARGET_GROUP_ID }}
+      TF_VAR_route_new_makers_to_sandbox: ${{ vars.ROUTE_NEW_MAKERS_TO_SANDBOX || 'false' }}
+      TF_VAR_backend_resource_group_name: ${{ vars.TF_STATE_RESOURCE_GROUP }}
+      TF_VAR_backend_storage_account_name: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+      TF_VAR_backend_container_name: ${{ vars.TF_STATE_CONTAINER }}
       POWER_PLATFORM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       POWER_PLATFORM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       POWER_PLATFORM_USE_OIDC: "true"
