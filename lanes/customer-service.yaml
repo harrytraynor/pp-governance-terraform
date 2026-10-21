@@ -1,0 +1,12 @@
+# Copy this file when you add a lane. Keep every key, including nulls and empty lists.
+lane: customer-service
+cost_centre: CC-0000
+tier: medium
+owner: service-apps-owner@example.com
+dev_mode: per-solution
+outside_group: false
+exception_expires_on: null
+triggers:
+  access: false
+  complexity: false
+member_object_ids: []

@@ -1,0 +1,37 @@
+# Cost-centre tier. Dev lanes fan into one shared test and one shared production.
+tier: medium
+description: Moderate audience and impact. Shared release path.
+firm: false
+environment_group:
+  rules:
+    sharing_controls:
+      share_mode: exclude sharing with security groups
+      share_max_limit: 50
+    solution_checker_enforcement:
+      solution_checker_mode: block
+      send_emails_enabled: true
+    backup_retention:
+      period_in_days: 14
+    usage_insights:
+      insights_enabled: true
+    maker_welcome_content: null
+    ai_generated_descriptions:
+      ai_description_enabled: false
+    ai_generative_settings:
+      bing_search_enabled: false
+      move_data_across_regions_enabled: false
+    advanced_connector_policies_only: null
+    advanced_connector_policies: null
+release:
+  fan_in: true
+  dedicated_prod: false
+dlp:
+  business_connector_ids:
+    - /providers/Microsoft.PowerApps/apis/shared_commondataservice
+    - /providers/Microsoft.PowerApps/apis/shared_approvals
+    - /providers/Microsoft.PowerApps/apis/shared_office365
+    - /providers/Microsoft.PowerApps/apis/shared_office365users
+    - /providers/Microsoft.PowerApps/apis/shared_sharepointonline
+    - /providers/Microsoft.PowerApps/apis/shared_teams
+  custom_connectors_data_group: NonBusiness
+ungrouped_managed_environment: null

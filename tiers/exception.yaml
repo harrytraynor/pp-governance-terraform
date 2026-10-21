@@ -1,0 +1,60 @@
+# Time-boxed departures from the sizes. A lane that picks this tier must set exception_expires_on.
+# ungrouped_managed_environment is used only when a lane sets outside_group: true.
+# Those attribute names and enums belong to powerplatform_managed_environment.
+# They are not the same strings as the group rule set.
+tier: exception
+description: A recorded exception with an owner and an expiry date.
+firm: true
+environment_group:
+  rules:
+    sharing_controls:
+      share_mode: exclude sharing with security groups
+      share_max_limit: 5
+    solution_checker_enforcement:
+      solution_checker_mode: block
+      send_emails_enabled: true
+    backup_retention:
+      period_in_days: 28
+    usage_insights:
+      insights_enabled: true
+    maker_welcome_content: null
+    ai_generated_descriptions:
+      ai_description_enabled: false
+    ai_generative_settings:
+      bing_search_enabled: false
+      move_data_across_regions_enabled: false
+    advanced_connector_policies_only:
+      enabled: true
+    advanced_connector_policies:
+      allowed_connectors:
+        - connector_id: shared_commondataservice
+          actions_mode: all_allowed
+        - connector_id: shared_approvals
+          actions_mode: all_allowed
+        - connector_id: shared_office365
+          actions_mode: all_allowed
+        - connector_id: shared_office365users
+          actions_mode: all_allowed
+        - connector_id: shared_sharepointonline
+          actions_mode: all_allowed
+        - connector_id: shared_teams
+          actions_mode: all_allowed
+release:
+  fan_in: false
+  dedicated_prod: true
+dlp:
+  business_connector_ids:
+    - /providers/Microsoft.PowerApps/apis/shared_commondataservice
+    - /providers/Microsoft.PowerApps/apis/shared_approvals
+    - /providers/Microsoft.PowerApps/apis/shared_office365
+    - /providers/Microsoft.PowerApps/apis/shared_office365users
+    - /providers/Microsoft.PowerApps/apis/shared_sharepointonline
+    - /providers/Microsoft.PowerApps/apis/shared_teams
+  custom_connectors_data_group: Blocked
+ungrouped_managed_environment:
+  is_usage_insights_disabled: false
+  is_group_sharing_disabled: true
+  limit_sharing_mode: ExcludeSharingToSecurityGroups
+  max_limit_user_sharing: 5
+  solution_checker_mode: Block
+  suppress_validation_emails: true

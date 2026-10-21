@@ -1,0 +1,133 @@
+name: Drift
+
+on:
+  schedule:
+    # 02:00 UTC every night.
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: drift
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    name: Drift ${{ matrix.stack }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - stack: tenant
+            state_key: tenant.tfstate
+          - stack: groups
+            state_key: groups.tfstate
+          - stack: lanes
+            state_key: lanes.tfstate
+    env:
+      TF_VAR_use_oidc: "true"
+      TF_VAR_use_cli: "false"
+      TF_VAR_tenant_id: ${{ vars.AZURE_TENANT_ID }}
+      TF_VAR_client_id: ${{ vars.AZURE_CLIENT_ID }}
+      TF_VAR_pipeline_application_id: ${{ vars.PIPELINE_APPLICATION_ID || vars.AZURE_CLIENT_ID }}
+      TF_VAR_create_release_stages: ${{ vars.CREATE_RELEASE_STAGES || 'false' }}
+      TF_VAR_manage_default_environment_dlp: ${{ vars.MANAGE_DEFAULT_ENVIRONMENT_DLP || 'false' }}
+      TF_VAR_currency_code: ${{ vars.POWER_PLATFORM_CURRENCY || 'GBP' }}
+      TF_VAR_name_prefix: ${{ vars.NAME_PREFIX || 'ppgov' }}
+      TF_VAR_backend_resource_group_name: ${{ vars.TF_STATE_RESOURCE_GROUP }}
+      TF_VAR_backend_storage_account_name: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+      TF_VAR_backend_container_name: ${{ vars.TF_STATE_CONTAINER }}
+      TF_VAR_environment_routing_target_group_id: ${{ vars.ENVIRONMENT_ROUTING_TARGET_GROUP_ID }}
+      POWER_PLATFORM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      POWER_PLATFORM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      POWER_PLATFORM_USE_OIDC: "true"
+      POWER_PLATFORM_LOCATION: ${{ vars.POWER_PLATFORM_LOCATION }}
+      POWER_PLATFORM_MACRO_REGION: ${{ vars.POWER_PLATFORM_MACRO_REGION }}
+      TF_IN_AUTOMATION: "true"
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Terraform
+        id: terraform
+        uses: ./.github/actions/terraform
+        with:
+          stack: ${{ matrix.stack }}
+          state_key: ${{ matrix.state_key }}
+          command: drift
+
+      - name: Open or close a drift issue
+        if: always() && steps.terraform.outcome != 'cancelled'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const stack = '${{ matrix.stack }}';
+            const code = Number('${{ steps.terraform.outputs.exit_code }}');
+            const title = `Drift in stacks/${stack}`;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const found = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${owner}/${repo} is:issue is:open "${title}" in:title`,
+            });
+            const existing = found.data.items.find((issue) => issue.title === title);
+            if (code === 0) {
+              if (existing) {
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: existing.number,
+                  body: 'The nightly plan is clean again. Closing this issue.',
+                });
+                await github.rest.issues.update({
+                  owner,
+                  repo,
+                  issue_number: existing.number,
+                  state: 'closed',
+                  state_reason: 'completed',
+                });
+              }
+              return;
+            }
+            if (code !== 2) {
+              core.setFailed(`Terraform plan exited ${code}. An exit code of 2 is drift. Anything else is a failed plan.`);
+              return;
+            }
+            const path = `${process.env.GITHUB_WORKSPACE}/plan-${stack}.txt`;
+            let text = fs.existsSync(path) ? fs.readFileSync(path, 'utf8') : '(no plan output was captured)';
+            text = text.replaceAll('```', "'''");
+            const max = 60000;
+            if (text.length > max) {
+              text = text.slice(0, max) + '\n\n... truncated ...';
+            }
+            const body = [
+              `Nightly \`terraform plan -detailed-exitcode\` for stacks/${stack} exited 2.`,
+              'The tenant has drifted from this repository. Put the change back, or open a pull request that makes it intentional.',
+              '',
+              '```',
+              text.trimEnd(),
+              '```',
+              '',
+              `Run: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+            ].join('\n');
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: existing.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner,
+                repo,
+                title,
+                body,
+              });
+            }

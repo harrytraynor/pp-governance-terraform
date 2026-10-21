@@ -1,0 +1,141 @@
+name: Plan
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+# A pull request from a fork does not receive these permissions, and it should not.
+permissions: {}
+
+concurrency:
+  group: plan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Format and validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.6
+          terraform_wrapper: false
+
+      - name: Install PyYAML
+        run: python3 -m pip install pyyaml
+
+      - name: Validate
+        run: ./scripts/validate-all.sh
+
+  plan:
+    name: Plan ${{ matrix.stack }}
+    needs: validate
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - stack: tenant
+            state_key: tenant.tfstate
+          - stack: groups
+            state_key: groups.tfstate
+          - stack: lanes
+            state_key: lanes.tfstate
+    env:
+      TF_VAR_use_oidc: "true"
+      TF_VAR_use_cli: "false"
+      TF_VAR_tenant_id: ${{ vars.AZURE_TENANT_ID }}
+      TF_VAR_client_id: ${{ vars.AZURE_CLIENT_ID }}
+      TF_VAR_pipeline_application_id: ${{ vars.PIPELINE_APPLICATION_ID || vars.AZURE_CLIENT_ID }}
+      TF_VAR_create_release_stages: ${{ vars.CREATE_RELEASE_STAGES || 'false' }}
+      TF_VAR_manage_default_environment_dlp: ${{ vars.MANAGE_DEFAULT_ENVIRONMENT_DLP || 'false' }}
+      TF_VAR_currency_code: ${{ vars.POWER_PLATFORM_CURRENCY || 'GBP' }}
+      TF_VAR_name_prefix: ${{ vars.NAME_PREFIX || 'ppgov' }}
+      TF_VAR_backend_resource_group_name: ${{ vars.TF_STATE_RESOURCE_GROUP }}
+      TF_VAR_backend_storage_account_name: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+      TF_VAR_backend_container_name: ${{ vars.TF_STATE_CONTAINER }}
+      TF_VAR_environment_routing_target_group_id: ${{ vars.ENVIRONMENT_ROUTING_TARGET_GROUP_ID }}
+      POWER_PLATFORM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      POWER_PLATFORM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      POWER_PLATFORM_USE_OIDC: "true"
+      POWER_PLATFORM_LOCATION: ${{ vars.POWER_PLATFORM_LOCATION }}
+      POWER_PLATFORM_MACRO_REGION: ${{ vars.POWER_PLATFORM_MACRO_REGION }}
+      TF_IN_AUTOMATION: "true"
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Terraform
+        id: terraform
+        uses: ./.github/actions/terraform
+        with:
+          stack: ${{ matrix.stack }}
+          state_key: ${{ matrix.state_key }}
+          command: plan
+
+      - name: Comment on the pull request
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const stack = '${{ matrix.stack }}';
+            const marker = `<!-- pp-governance-plan:${stack} -->`;
+            const path = `${process.env.GITHUB_WORKSPACE}/plan-${stack}.txt`;
+            let text = '(no plan output was captured)';
+            if (fs.existsSync(path)) {
+              text = fs.readFileSync(path, 'utf8').replaceAll('```', "'''");
+            }
+            const max = 60000;
+            if (text.length > max) {
+              text = text.slice(0, max) + '\n\n... truncated ...';
+            }
+            const body = [
+              marker,
+              `## Plan: stacks/${stack}`,
+              '',
+              '```',
+              text.trimEnd(),
+              '```',
+              '',
+            ].join('\n');
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find((comment) => comment.user.type === 'Bot' && comment.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: Upload plan
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan-${{ matrix.stack }}
+          path: plan-${{ matrix.stack }}.txt
+          if-no-files-found: ignore

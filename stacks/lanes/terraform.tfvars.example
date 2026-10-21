@@ -1,0 +1,39 @@
+# Copy to terraform.tfvars in this directory. terraform.tfvars is gitignored.
+use_cli  = true
+use_oidc = false
+
+# tenant_id = "00000000-0000-0000-0000-000000000000"
+# client_id = "00000000-0000-0000-0000-000000000000"
+
+name_prefix   = "ppgov"
+location      = "europe"
+currency_code = "GBP"
+language_code = 1033
+
+# Application (client) id of the service principal that pipelines will use.
+# It can be the same app that runs Terraform. Replace this before you apply.
+pipeline_application_id = "00000000-0000-0000-0000-000000000000"
+
+# False creates dev environments only. True also creates test and production
+# from the tier's release block. Read that plan before you turn it on.
+create_release_stages = false
+
+# After a local groups apply, paste `terraform output -json environment_group_ids`
+# here and keep the groups backend on local. Leave this unset when both stacks
+# use the Azure Storage backend; the lanes stack then reads groups.tfstate.
+#
+# group_ids = {
+#   sandbox   = "00000000-0000-0000-0000-000000000000"
+#   small     = "00000000-0000-0000-0000-000000000000"
+#   medium    = "00000000-0000-0000-0000-000000000000"
+#   large     = "00000000-0000-0000-0000-000000000000"
+#   exception = "00000000-0000-0000-0000-000000000000"
+# }
+
+# Remote groups state. Required only when group_ids is not set.
+# backend_resource_group_name  = "rg-REPLACE-tfstate"
+# backend_storage_account_name = "stREPLACE"
+# backend_container_name       = "tfstate"
+
+# Tenants that reject location: set location = null and uncomment the next line.
+# macro_region = "eu-efta"
