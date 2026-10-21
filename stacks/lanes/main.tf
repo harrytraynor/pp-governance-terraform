@@ -150,8 +150,9 @@ module "dev" {
   source   = "../../modules/lane"
   for_each = local.lanes
 
-  name                            = "${var.name_prefix}-${each.key}-dev"
-  description                     = "${var.name_prefix}-${each.key}-dev. Cost centre ${each.value.cost_centre}. Owner ${each.value.owner}. Tier ${each.value.tier}. Dev mode ${each.value.dev_mode}. Governed by Terraform."
+  name_label                      = each.key
+  stage                           = "dev"
+  description                     = "Cost centre ${each.value.cost_centre}. Owner ${each.value.owner}. Tier ${each.value.tier}. Dev mode ${each.value.dev_mode}. Governed by Terraform."
   environment_type                = local.dev_environment_types[each.key]
   owner_id                        = local.dev_environment_owner_ids[each.key]
   cadence                         = "Frequent"
@@ -178,7 +179,8 @@ module "shared_test" {
   source   = "../../modules/lane"
   for_each = local.shared_tiers
 
-  name                            = "${var.name_prefix}-shared-${each.key}-test"
+  name_label                      = "all-lanes"
+  stage                           = "test"
   description                     = "Shared test for tier ${each.key}. Fan-in target. Governed by Terraform."
   environment_type                = "Sandbox"
   cadence                         = "Moderate"
@@ -201,7 +203,8 @@ module "shared_prod" {
   source   = "../../modules/lane"
   for_each = local.shared_tiers
 
-  name                            = "${var.name_prefix}-shared-${each.key}-prod"
+  name_label                      = "all-lanes"
+  stage                           = "prod"
   description                     = "Shared production for tier ${each.key}. Fan-in target. Governed by Terraform."
   environment_type                = "Production"
   cadence                         = "Moderate"
@@ -224,8 +227,9 @@ module "dedicated_test" {
   source   = "../../modules/lane"
   for_each = local.dedicated_lanes
 
-  name                            = "${var.name_prefix}-${each.key}-test"
-  description                     = "${var.name_prefix}-${each.key}-test. Cost centre ${each.value.cost_centre}. Owner ${each.value.owner}. Tier ${each.value.tier}. Governed by Terraform."
+  name_label                      = each.key
+  stage                           = "test"
+  description                     = "Cost centre ${each.value.cost_centre}. Owner ${each.value.owner}. Tier ${each.value.tier}. Governed by Terraform."
   environment_type                = "Sandbox"
   cadence                         = "Moderate"
   location                        = var.location == null || var.location == "" ? null : var.location
@@ -247,8 +251,9 @@ module "dedicated_prod" {
   source   = "../../modules/lane"
   for_each = local.dedicated_lanes
 
-  name                            = "${var.name_prefix}-${each.key}-prod"
-  description                     = "${var.name_prefix}-${each.key}-prod. Cost centre ${each.value.cost_centre}. Owner ${each.value.owner}. Tier ${each.value.tier}. Governed by Terraform."
+  name_label                      = each.key
+  stage                           = "prod"
+  description                     = "Cost centre ${each.value.cost_centre}. Owner ${each.value.owner}. Tier ${each.value.tier}. Governed by Terraform."
   environment_type                = "Production"
   cadence                         = "Moderate"
   location                        = var.location == null || var.location == "" ? null : var.location

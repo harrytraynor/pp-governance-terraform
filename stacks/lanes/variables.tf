@@ -24,7 +24,7 @@ variable "use_cli" {
 
 variable "name_prefix" {
   type        = string
-  description = "Short prefix for environment and group names."
+  description = "Short prefix for data policy names. Environment display names use the cost centre, not this prefix."
   default     = "ppgov"
 
   validation {

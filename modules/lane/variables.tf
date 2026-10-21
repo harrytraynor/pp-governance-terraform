@@ -1,6 +1,21 @@
-variable "name" {
+variable "name_label" {
   type        = string
-  description = "Environment display name and security group display name."
+  description = "Lane name, or all-lanes for a shared fan-in environment. Combined with the cost centre, tier, and stage into the display name."
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9 ._-]{0,40}$", trimspace(var.name_label)))
+    error_message = "name_label is required. Use letters, digits, spaces, dots, underscores, or hyphens."
+  }
+}
+
+variable "stage" {
+  type        = string
+  description = "dev, test, or prod. The last segment of the display name."
+
+  validation {
+    condition     = contains(["dev", "test", "prod"], var.stage)
+    error_message = "stage must be dev, test, or prod."
+  }
 }
 
 variable "description" {
@@ -67,7 +82,12 @@ variable "environment_group_id" {
 
 variable "cost_centre" {
   type        = string
-  description = "Cost centre recorded on the environment description."
+  description = "Cost centre. First segment of the environment display name. Blank is rejected. Lane files use CC-0000. Shared environments use shared."
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9 ._-]{0,40}$", trimspace(var.cost_centre)))
+    error_message = "cost_centre is required. Trimmed, it must start with a letter or digit and use only letters, digits, spaces, dots, underscores, or hyphens. Example: CC-0000."
+  }
 }
 
 variable "owner" {
@@ -77,7 +97,12 @@ variable "owner" {
 
 variable "tier" {
   type        = string
-  description = "Tier name recorded on the environment description."
+  description = "Tier name. Third segment of the environment display name."
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9 ._-]{0,40}$", trimspace(var.tier)))
+    error_message = "tier is required for the display name."
+  }
 }
 
 variable "pipeline_application_id" {
