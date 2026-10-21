@@ -1,0 +1,19 @@
+# Access trigger is true, so the lane is large and gets its own test and production
+# once create_release_stages is true.
+lane: field-operations
+cost_centre: CC-0000
+tier: large
+owner: field-ops-owner@example.com
+dev_mode: per-solution
+outside_group: false
+exception_expires_on: null
+triggers:
+  access: true
+  complexity: false
+member_object_ids: []
+# Optional. Sandbox (default when omitted) or Developer. The examples use Developer
+# because the dev tenant has no paid Dataverse database capacity. See the README.
+dev_environment_type: Developer
+# Entra user object id that owns the Developer environment. Required for Developer.
+# Replace this placeholder with a user object id from your own tenant before you apply.
+dev_environment_owner_object_id: 00000000-0000-0000-0000-000000000000

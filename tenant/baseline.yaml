@@ -1,0 +1,18 @@
+# Values this stack will send. Anything omitted is left untouched.
+# Deprecated tenant-setting attributes are intentionally absent.
+disable_environment_creation_by_non_admin_users: true
+disable_trial_environment_creation_by_non_admin_users: true
+disable_portals_creation_by_non_admin_users: true
+# Forced to false when environment routing is switched on, so makers can receive
+# the personal developer environment the routing rule creates.
+disable_developer_environment_creation_by_non_admin_users: true
+enable_default_environment_routing: false
+disable_share_with_everyone: true
+disable_connection_sharing_with_everyone: true
+disable_billing_policy_creation_by_non_admin_users: true
+default_environment_dlp:
+  business_connector_ids:
+    - /providers/Microsoft.PowerApps/apis/shared_commondataservice
+    - /providers/Microsoft.PowerApps/apis/shared_approvals
+    - /providers/Microsoft.PowerApps/apis/shared_office365users
+  custom_connectors_data_group: Blocked

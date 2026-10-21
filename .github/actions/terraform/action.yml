@@ -1,0 +1,129 @@
+name: Terraform stack
+description: Sign in with OIDC, init one stack, and plan, apply, or check drift.
+
+inputs:
+  stack:
+    description: Directory name under stacks/
+    required: true
+  state_key:
+    description: Blob name for this stack's state
+    required: true
+  command:
+    description: plan, apply, or drift
+    required: true
+  azure_client_id:
+    description: Application (client) id passed in by the workflow
+    required: true
+  azure_tenant_id:
+    description: Entra tenant id passed in by the workflow
+    required: true
+  azure_subscription_id:
+    description: Subscription id passed in by the workflow
+    required: true
+  tf_state_resource_group:
+    description: State resource group passed in by the workflow
+    required: true
+  tf_state_storage_account:
+    description: State storage account passed in by the workflow
+    required: true
+  tf_state_container:
+    description: State container passed in by the workflow
+    required: true
+
+outputs:
+  exit_code:
+    description: Terraform exit code. Drift returns 0 when the plan exit code is 0 or 2.
+    value: ${{ steps.run.outputs.exit_code }}
+
+runs:
+  using: composite
+  steps:
+    - name: Sign in to Azure
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.azure_client_id }}
+        tenant-id: ${{ inputs.azure_tenant_id }}
+        subscription-id: ${{ inputs.azure_subscription_id }}
+
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.16.6
+        terraform_wrapper: false
+
+    - name: Select geography
+      shell: bash
+      run: |
+        set -euo pipefail
+        location="${POWER_PLATFORM_LOCATION:-}"
+        macro="${POWER_PLATFORM_MACRO_REGION:-}"
+        if [ -n "${location}" ] && [ -n "${macro}" ]; then
+          echo "Set only one of the GitHub variables POWER_PLATFORM_LOCATION or POWER_PLATFORM_MACRO_REGION."
+          exit 1
+        fi
+        if [ -n "${location}" ]; then
+          echo "TF_VAR_location=${location}" >> "${GITHUB_ENV}"
+        fi
+        if [ -n "${macro}" ]; then
+          echo "TF_VAR_macro_region=${macro}" >> "${GITHUB_ENV}"
+        fi
+
+    - name: Write backend config
+      shell: bash
+      working-directory: stacks/${{ inputs.stack }}
+      env:
+        STATE_KEY: ${{ inputs.state_key }}
+        TF_STATE_RESOURCE_GROUP: ${{ inputs.tf_state_resource_group }}
+        TF_STATE_STORAGE_ACCOUNT: ${{ inputs.tf_state_storage_account }}
+        TF_STATE_CONTAINER: ${{ inputs.tf_state_container }}
+      run: |
+        set -euo pipefail
+        cat > backend.hcl <<EOF
+        resource_group_name  = "${TF_STATE_RESOURCE_GROUP}"
+        storage_account_name = "${TF_STATE_STORAGE_ACCOUNT}"
+        container_name       = "${TF_STATE_CONTAINER}"
+        key                  = "${STATE_KEY}"
+        use_oidc             = true
+        use_azuread_auth     = true
+        EOF
+
+    - name: Init
+      shell: bash
+      working-directory: stacks/${{ inputs.stack }}
+      run: terraform init -input=false -no-color -backend-config=backend.hcl
+
+    - name: Run Terraform
+      id: run
+      shell: bash
+      working-directory: stacks/${{ inputs.stack }}
+      run: |
+        set -uo pipefail
+        outfile="${GITHUB_WORKSPACE}/plan-${STACK}.txt"
+        case "${COMMAND}" in
+          plan)
+            terraform plan -input=false -no-color -lock-timeout=5m -out=tfplan | tee "${outfile}"
+            code=${PIPESTATUS[0]}
+            ;;
+          apply)
+            terraform apply -input=false -no-color -lock-timeout=5m -auto-approve | tee "${outfile}"
+            code=${PIPESTATUS[0]}
+            ;;
+          drift)
+            set +e
+            terraform plan -input=false -no-color -lock-timeout=5m -detailed-exitcode | tee "${outfile}"
+            code=${PIPESTATUS[0]}
+            set -e
+            ;;
+          *)
+            echo "Unknown command ${COMMAND}"
+            exit 1
+            ;;
+        esac
+        echo "exit_code=${code}" >> "${GITHUB_OUTPUT}"
+        if [ "${COMMAND}" = "drift" ] && { [ "${code}" -eq 0 ] || [ "${code}" -eq 2 ]; }; then
+          exit 0
+        fi
+        exit "${code}"
+      env:
+        STACK: ${{ inputs.stack }}
+        COMMAND: ${{ inputs.command }}

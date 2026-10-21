@@ -1,0 +1,18 @@
+# Copy this file when you add a lane. Keep every key, including nulls and empty lists.
+lane: customer-service
+cost_centre: CC-0000
+tier: medium
+owner: service-apps-owner@example.com
+dev_mode: per-solution
+outside_group: false
+exception_expires_on: null
+triggers:
+  access: false
+  complexity: false
+member_object_ids: []
+# Optional. Sandbox (default when omitted) or Developer. The examples use Developer
+# because the dev tenant has no paid Dataverse database capacity. See the README.
+dev_environment_type: Developer
+# Entra user object id that owns the Developer environment. Required for Developer.
+# Replace this placeholder with a user object id from your own tenant before you apply.
+dev_environment_owner_object_id: 00000000-0000-0000-0000-000000000000

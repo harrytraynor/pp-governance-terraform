@@ -1,0 +1,6 @@
+# Copy to terraform.tfvars in this directory. terraform.tfvars is gitignored.
+use_cli  = true
+use_oidc = false
+
+# tenant_id = "00000000-0000-0000-0000-000000000000"
+# client_id = "00000000-0000-0000-0000-000000000000"

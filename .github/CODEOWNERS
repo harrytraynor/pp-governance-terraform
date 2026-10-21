@@ -1,0 +1,19 @@
+# CODEOWNERS for this example.
+#
+# GitHub only enforces owners that exist in the repository's organisation.
+# Replace the commented lines with real users or teams before you rely on them.
+# Until then this file documents the intended review, and it does not assign anyone.
+#
+# Small and medium lane files: the platform team and the business owner named in the file.
+# Large lanes, exception lanes, tiers/, tenant/, and the tenant and groups stacks:
+# add security as well. A lane file names its owner; GitHub cannot read that
+# email, so add the person here or ask them for a review on the pull request.
+#
+# /lanes/customer-service.yaml    @platform-team @service-apps-owner
+# /lanes/field-operations.yaml    @platform-team @security-team @field-ops-owner
+# /tiers/                         @platform-team @security-team
+# /tenant/                        @platform-team @security-team
+# /stacks/tenant/                 @platform-team @security-team
+# /stacks/groups/                 @platform-team @security-team
+# /stacks/lanes/                  @platform-team
+# /modules/                       @platform-team

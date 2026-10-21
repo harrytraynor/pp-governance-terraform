@@ -1,0 +1,26 @@
+# Adoption example. This file is not loaded, because Terraform only reads *.tf.
+# Copy the import blocks you need into imports.tf, replace the ids, and plan.
+# Do that before you tighten rules. The first plan after import should show no changes.
+#
+# Environment import id: the environment guid.
+# import {
+#   to = module.dev["customer-service"].powerplatform_environment.this
+#   id = "00000000-0000-0000-0000-000000000000"
+# }
+#
+# Security group import id: the Entra object id.
+# import {
+#   to = module.dev["customer-service"].azuread_group.this
+#   id = "00000000-0000-0000-0000-000000000000"
+# }
+#
+# Application user import uses the Dataverse system user id. See the provider
+# docs for powerplatform_application_user before importing one that already exists.
+# Destroying an adopted application user deletes it.
+#
+# Security role assignment import id:
+# {environment id}/systemusers/{system user id}/{role id}
+# import {
+#   to = module.dev["customer-service"].powerplatform_security_role_assignment.pipeline[0]
+#   id = "00000000-0000-0000-0000-000000000001/systemusers/00000000-0000-0000-0000-000000000002/00000000-0000-0000-0000-000000000004"
+# }
