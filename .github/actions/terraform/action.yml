@@ -29,6 +29,14 @@ inputs:
   tf_state_container:
     description: State container passed in by the workflow
     required: true
+  plan_label:
+    description: Plan file stem. Defaults to the stack name. Lanes jobs pass lanes-<cost centre> so parallel artifacts stay unique.
+    required: false
+    default: ""
+  cost_centre:
+    description: Lanes cost_centre, or empty for tenant and groups. shared checks which cost centre state blobs exist before Terraform runs.
+    required: false
+    default: ""
 
 outputs:
   exit_code:
@@ -87,6 +95,53 @@ runs:
         use_azuread_auth     = true
         EOF
 
+    - name: Check the lanes state key
+      if: inputs.stack == 'lanes'
+      shell: bash
+      env:
+        STATE_KEY: ${{ inputs.state_key }}
+        COST_CENTRE: ${{ inputs.cost_centre }}
+        TF_STATE_STORAGE_ACCOUNT: ${{ inputs.tf_state_storage_account }}
+        TF_STATE_CONTAINER: ${{ inputs.tf_state_container }}
+      run: |
+        set -euo pipefail
+        blob_exists() {
+          az storage blob exists \
+            --account-name "${TF_STATE_STORAGE_ACCOUNT}" \
+            --container-name "${TF_STATE_CONTAINER}" \
+            --name "$1" \
+            --auth-mode login \
+            --only-show-errors \
+            --query exists \
+            -o tsv | tr -d '[:space:]'
+        }
+        # An empty new key would plan creates of environments that already
+        # live in lanes.tfstate. Stop until the one-off state move has run.
+        if [ "${STATE_KEY}" != "lanes.tfstate" ]; then
+          legacy="$(blob_exists lanes.tfstate)"
+          target="$(blob_exists "${STATE_KEY}")"
+          if [ "${legacy}" = "true" ] && [ "${target}" != "true" ]; then
+            echo "The unsplit blob lanes.tfstate still exists, and ${STATE_KEY} does not."
+            echo "Run scripts/split-lanes-state.sh once, from a machine that can read and write the state container, before this job."
+            echo "That script moves state only. It does not change Power Platform."
+            exit 1
+          fi
+        fi
+        if [ "${COST_CENTRE}" = "shared" ]; then
+          python3 -m pip install pyyaml >/dev/null
+          present=()
+          while IFS= read -r slug; do
+            if [ -z "${slug}" ]; then
+              continue
+            fi
+            if [ "$(blob_exists "lanes/${slug}.tfstate")" = "true" ]; then
+              present+=("\"${slug}\"")
+            fi
+          done < <(python3 "${GITHUB_WORKSPACE}/scripts/lane_states.py" --root "${GITHUB_WORKSPACE}" slugs)
+          json="[$(IFS=,; echo "${present[*]}")]"
+          echo "TF_VAR_lane_remote_state_slugs=${json}" >> "${GITHUB_ENV}"
+        fi
+
     - name: Init
       shell: bash
       working-directory: stacks/${{ inputs.stack }}
@@ -98,7 +153,11 @@ runs:
       working-directory: stacks/${{ inputs.stack }}
       run: |
         set -uo pipefail
-        outfile="${GITHUB_WORKSPACE}/plan-${STACK}.txt"
+        label="${PLAN_LABEL}"
+        if [ -z "${label}" ]; then
+          label="${STACK}"
+        fi
+        outfile="${GITHUB_WORKSPACE}/plan-${label}.txt"
         case "${COMMAND}" in
           plan)
             terraform plan -input=false -no-color -lock-timeout=5m -out=tfplan | tee "${outfile}"
@@ -127,3 +186,4 @@ runs:
       env:
         STACK: ${{ inputs.stack }}
         COMMAND: ${{ inputs.command }}
+        PLAN_LABEL: ${{ inputs.plan_label }}

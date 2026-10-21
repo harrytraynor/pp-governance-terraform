@@ -129,7 +129,7 @@ variable "manage_security_role_assignment" {
 
 variable "member_object_ids" {
   type        = list(string)
-  description = "Entra object ids added as members of the environment security group."
+  description = "Entra object ids added as members of the lane security group. Ignored for a Developer environment, which has no lane group."
   default     = []
 }
 

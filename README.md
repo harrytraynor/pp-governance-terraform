@@ -25,15 +25,15 @@ Read [Security and limitations](#security-and-limitations) before you adapt this
 | `modules/tenant-baseline` | The tenant settings resource. |
 | `stacks/tenant` | Tenant settings, and an optional default-environment data policy. Own state. |
 | `stacks/groups` | One environment group per tier file. Own state. |
-| `stacks/lanes` | Dev environments for every lane, optional test and production, and one data policy per tier that has a lane. Own state. |
+| `stacks/lanes` | One apply for one cost centre, or for `shared`. Cost centre state holds that centre's environments. `shared` holds fan-in environments and the tier data policies. |
 | `examples/register-admin-application` | One-shot registration of the service principal. A person runs it. The service principal cannot register itself. |
 | `examples/tenant-isolation` | Optional cross-tenant isolation policy. Separate from the tenant stack. Workflows do not apply it. |
-| `scripts/` | Lane checks, a local validate script, and state-storage bootstrap. |
+| `scripts/` | Lane checks, the lanes state migration, a local validate script, and state-storage bootstrap. |
 | `.github/workflows/` | Plan on pull request, apply on merge to `main`, nightly drift check. |
 
-Apply order is **tenant**, then **groups**, then **lanes**. A bad lane plan cannot refresh the tenant stack, because the state files are separate.
+Apply order is **tenant**, then **groups**, then each **lanes** cost centre, then **lanes shared**. A bad lane plan cannot refresh the tenant stack, and a plan for one cost centre cannot refresh another's environments, because the state files are separate. The shared state runs last so its data policies see the environment ids just applied.
 
-With `create_release_stages = false` (the default), the two example lanes produce two dev environments: `cc-0000-customer-service-dev` and `cc-0000-field-operations-dev`. The display name is `<cost centre>-<lane>-<stage>`, built in `modules/lane`. The cost centre and the lane are trimmed, lowercased, and slugified: spaces and underscores become hyphens, and repeated hyphens collapse. A blank cost centre is rejected. Names have to stay unique for each lane and stage, and validation fails when two would slugify to the same name. A shared fan-in environment uses the label `all-lanes`, for example `shared-all-lanes-test`. `name_prefix` is only used on data policy names. Provider 4.2.1 updates `display_name` in place. The Entra group's mail nickname is left as it was, because changing it would replace the group. The example lanes set `dev_environment_type: Developer`; see [Developer dev environments](#developer-dev-environments). Turning the flag on also creates `shared-all-lanes-test`, `shared-all-lanes-prod`, `cc-0000-field-operations-test`, and `cc-0000-field-operations-prod`. Read that plan before you apply it.
+With `create_release_stages = false` (the default), the two example lanes produce two dev environments: `cc-0000-customer-service-dev` and `cc-0000-field-operations-dev`. The display name is `<cost centre>-<lane>-<stage>`, built in `modules/lane`. The cost centre and the lane are trimmed, lowercased, and slugified: spaces and underscores become hyphens, and repeated hyphens collapse. A blank cost centre is rejected. Names have to stay unique for each lane and stage, and validation fails when two would slugify to the same name. A shared fan-in environment uses the label `all-lanes`, for example `shared-all-lanes-test`. `name_prefix` is only used on data policy names. Provider 4.2.1 updates `display_name` in place. The Entra group's mail nickname is left as it was, because changing it would replace the group. A Developer lane does not create a lane security group. The example lanes set `dev_environment_type: Developer`; see [Developer dev environments](#developer-dev-environments). Turning the flag on also creates `shared-all-lanes-test`, `shared-all-lanes-prod`, `cc-0000-field-operations-test`, and `cc-0000-field-operations-prod`. Read that plan before you apply it.
 
 ## Prerequisites
 
@@ -41,7 +41,7 @@ You need:
 
 - Terraform 1.6 or newer. The workflows pin 1.16.6.
 - Azure CLI, for the local sign-in and for `scripts/bootstrap-state.sh`.
-- Python 3 with PyYAML (`python3 -m pip install pyyaml`), for `scripts/check-lanes.py`.
+- Python 3 with PyYAML (`python3 -m pip install pyyaml`), for `scripts/check-lanes.py` and `scripts/split-lanes-state.sh`. The state split reads every lane file. Without PyYAML it stops before it edits state.
 - A Power Platform dev or test tenant with a licence that covers managed environments. Environment groups require managed environments. Each Sandbox environment with Dataverse also needs at least 1 GB of free **paid** Dataverse database capacity. Developer, viral trial, and M365 E5 developer licences add none, and the create fails with HTTP 409 `InsufficientCapacity_StorageDriven`.
 - An Azure subscription for the Terraform state storage account, if you use the `azurerm` backend. A first local plan can use the local backend instead. See below.
 
@@ -137,7 +137,9 @@ In each of `stacks/tenant`, `stacks/groups`, and `stacks/lanes`:
 cp backend.hcl.example backend.hcl
 ```
 
-Edit the three files. The keys are already `tenant.tfstate`, `groups.tfstate`, and `lanes.tfstate`. Set `use_oidc = false` for a CLI sign-in, or leave `use_oidc = true` when the Azure CLI session is itself a federated identity. Keep `use_azuread_auth = true`: the script disables shared key access, so the backend cannot fall back to account keys.
+Edit the three files. The keys are already `tenant.tfstate`, `groups.tfstate`, and `lanes/cc-0000.tfstate`. Fan-in environments and the tier data policies use a second lanes key, `lanes/shared.tfstate`, passed with `-backend-config=key=...` so you do not edit the file between inits. Set `use_oidc = false` for a CLI sign-in, or leave `use_oidc = true` when the Azure CLI session is itself a federated identity. Keep `use_azuread_auth = true`: the script disables shared key access, so the backend cannot fall back to account keys.
+
+A local backend is one file. It cannot hold `lanes/cc-0000.tfstate` and `lanes/shared.tfstate` at the same time. Use the Azure Storage backend for the split. An existing `lanes.tfstate` blob has to be moved before the first apply of these keys. See [Move an existing lanes state](#move-an-existing-lanes-state).
 
 The script hardens the account: shared key and SAS access off, TLS 1.2 minimum, HTTPS only, no public blob access, blob versioning, and 14-day blob and container soft delete (`SOFT_DELETE_DAYS`). It grants Storage Blob Data Contributor on the account, then creates the container with `--auth-mode login`, retrying for up to `RBAC_WAIT_SECONDS` (default 600) while the role propagates.
 
@@ -190,32 +192,79 @@ Edit `terraform.tfvars`:
 - In each lane file, replace `dev_environment_owner_object_id` (`00000000-0000-0000-0000-000000000000`) with an Entra user object id from your tenant. A Developer environment needs that owner.
 - Set `location` to a geography your tenant accepts (the example uses `europe`), or set `location = null` and set `macro_region` (for example `eu-efta`). Set exactly one.
 - Local groups state: paste the groups output into `group_ids`.
-- Remote groups state: set `backend_resource_group_name`, `backend_storage_account_name`, and `backend_container_name`, and leave `group_ids` unset. Init this stack with the same storage account so it can read `groups.tfstate`.
+- Remote groups state: set `backend_resource_group_name`, `backend_storage_account_name`, and `backend_container_name`, and leave `group_ids` unset. Init this stack with the same storage account so it can read `groups.tfstate`. The shared state also needs those three values so it can read each `lanes/<slug>.tfstate`.
+- `cost_centre` selects the state. `cc-0000` matches the example lanes. `shared` is the fan-in and data-policy state. There is no default, so a forgotten value cannot apply the wrong blob.
+
+`cost_centre` and the backend key have to name the same slug. `prevent_destroy` on the environments makes a mismatch fail the plan instead of deleting them.
 
 ```bash
-terraform init -input=false -backend-config=backend.hcl
+terraform init -input=false -reconfigure -backend-config=backend.hcl -backend-config=key=lanes/cc-0000.tfstate
 terraform plan
 ```
 
-The default plan adds, per example lane:
+The `cc-0000` plan adds, per example lane:
 
-- an Entra security group
 - a Developer environment with Dataverse, in that tier's group (the example lanes set `dev_environment_type: Developer`; omit that key for Sandbox)
 - an application user
 - a System Administrator security role assignment, unless the pipeline application is the identity running Terraform (see below)
-- a share of a tier data policy (medium for customer-service, large for field-operations)
 
-`member_object_ids` is empty in the examples, so the security group has no members yet. The owner email is recorded on the environment description. It is not looked up in Entra. Add Entra object ids to the lane file before people need to open the environment.
+The example lanes are Developer, so this plan does not create a lane Entra security group. A Sandbox dev lane does. `member_object_ids` is empty in the examples. Those ids are unused while the lane is Developer, and they become group members after a switch to Sandbox. The owner email is recorded on the environment description. It is not looked up in Entra.
 
-`create_release_stages` defaults to false. Set it to true only after you have read the plan that adds test and production.
+Data policies are not in this state. Apply `cc-0000` first, then init the shared key and apply that. The shared plan creates one data policy per tier that has a lane (medium for customer-service, large for field-operations) and lists the environment ids from `lanes/cc-0000.tfstate`.
 
 ```bash
 terraform apply
 ```
 
+```bash
+# same terraform.tfvars, with cost_centre = "shared"
+terraform init -input=false -reconfigure -backend-config=backend.hcl -backend-config=key=lanes/shared.tfstate
+terraform plan
+terraform apply
+```
+
+`create_release_stages` defaults to false. Set it to true only after you have read the plan that adds test and production. Dedicated test and production stay in the cost centre state. Fan-in test and production (`shared-all-lanes-test`, `shared-all-lanes-prod`) are created by the shared state.
+
 Environment create timeouts are 90 minutes. The first apply is also the test of two things this repository cannot prove offline: service principal calls to `powerplatform_environment`, and creating the environment already inside a group via `environment_group_id`. Watch that apply.
 
-If a data policy plan fails because an environment id is still unknown, apply the environments first (`terraform apply -target=module.dev`), then run a full apply.
+If the shared data policy plan fails because an environment id is still unknown, apply the cost centre state first, then plan shared again.
+
+## Move an existing lanes state
+
+Do this once when the storage account already has `lanes.tfstate` from the unsplit stack. Do it before the first apply that uses `lanes/<slug>.tfstate`. CI refuses to plan or apply a new key while `lanes.tfstate` exists and the target blob does not, so an empty state cannot create a second copy of the environments.
+
+The script needs an Azure login with **Storage Blob Data Contributor** on the state account, Terraform, and Python 3 with PyYAML (`python3 -m pip install pyyaml`). PyYAML is a dependency: `scripts/lane_states.py` imports it to classify addresses. It does not need a Power Platform token, and it does not refresh, plan, or apply.
+
+Run it from `stacks/lanes` after that directory has been initialised. Local `terraform state list` and `terraform state rm -state=` commands do not run there. Terraform ignores `-state` in a directory whose backend is remote, and `state rm` would then edit the live blob with locking off. The script runs those commands with `-chdir` pointed at an empty directory that has no backend. It refuses to run them if that directory, or the directory it would use as its current directory, has `.terraform/terraform.tfstate` pointing at a remote backend.
+
+```bash
+az login
+cd stacks/lanes
+# backend.hcl points at the state account.
+# For a user sign-in: use_oidc = false and use_azuread_auth = true.
+../../scripts/split-lanes-state.sh --dry-run
+../../scripts/split-lanes-state.sh
+```
+
+What it does:
+
+1. Pulls `lanes.tfstate` and uploads a copy to `lanes.tfstate.pre-split`. That copy is the rollback.
+2. Writes dev and dedicated resources for each cost centre into `lanes/<slug>.tfstate`. Both example lanes are `CC-0000`, so they land in `lanes/cc-0000.tfstate`.
+3. Writes fan-in modules and tier data policies into `lanes/shared.tfstate`.
+4. Copies the tier markers and the auth marker into every new state, so the next plan does not recreate them.
+5. Drops the tenant-wide environment catalogue data source. That data source is not an environment.
+6. Deletes the old `lanes.tfstate` blob after the new blobs are uploaded.
+
+`--dry-run` still reads the blob. It does not upload or delete. `--self-test` splits a fixture on the laptop, starting from a directory that has been initialised with a remote backend, and does not talk to Azure. The script stops if it finds a resource address it does not recognise, and it refuses an empty source state.
+
+Then plan `lanes/cc-0000.tfstate` and `lanes/shared.tfstate` before you apply either. Environments must not be created or destroyed by the move itself. Apply the cost centre state first, then the shared state.
+
+Trade-offs of the split:
+
+- Each cost centre plan is smaller, and its state lock is its own. Cost centre applies run in parallel. Shared runs after them.
+- A mistake in one cost centre cannot refresh another cost centre's environments. `prevent_destroy` still stops a wrong `cost_centre` value from deleting environments.
+- The shared state reads the other blobs to build data policy membership. A new cost centre is absent from that list until its blob exists. CI checks the container and passes only the blobs that are already there, so the shared plan stays green on the pull request that adds the lane. The following apply creates the environment, then updates the policy.
+- Routed personal developer environments are still outside these states, so they are not added to a data policy. See [Steering makers away from the default environment](#steering-makers-away-from-the-default-environment).
 
 ## GitHub Actions
 
@@ -223,11 +272,11 @@ Workflows:
 
 | Workflow | When | What |
 | --- | --- | --- |
-| `plan.yml` | Every pull request, and `workflow_dispatch` | Format, validate, and lane checks. When Azure variables are set, `terraform plan` for each stack, posted as a pull request comment. |
-| `apply.yml` | Push to `main` that touches modules, stacks, tiers, lanes, tenant, or the workflow itself, and `workflow_dispatch` | When Azure variables are set, apply tenant, then groups, then lanes. Each apply job uses the GitHub environment `production`. |
-| `drift.yml` | 02:00 UTC, and `workflow_dispatch` | When Azure variables are set, `terraform plan -detailed-exitcode`. Exit code 2 opens or updates an issue titled `Drift in stacks/<stack>`. Exit code 0 closes that issue when the plan is clean again. Any other exit code fails the job. |
+| `plan.yml` | Every pull request, and `workflow_dispatch` | Format, validate, and lane checks. When Azure variables are set, `terraform plan` for tenant, groups, and the lanes states affected by the diff. A lane file plans that cost centre and the shared state. A change under `modules/`, `stacks/`, `tiers/`, or `.github/` plans every lanes state. `workflow_dispatch` plans every state. |
+| `apply.yml` | Push to `main` that touches modules, stacks, tiers, lanes, tenant, or the workflow itself, and `workflow_dispatch` | When Azure variables are set, one approval, then apply tenant, then groups, then the same lanes matrix. Cost centre applies run in parallel. The shared lanes state runs after them. |
+| `drift.yml` | 02:00 UTC, and `workflow_dispatch` | When Azure variables are set, `terraform plan -detailed-exitcode` for tenant, groups, every cost centre, and the shared lanes state. Exit code 2 opens or updates an issue titled `Drift in stacks/<label>`. Exit code 0 closes that issue when the plan is clean again. Any other exit code fails the job. |
 
-Plan comments are marked `<!-- pp-governance-plan:STACK -->` and truncated at 60,000 characters.
+Plan comments are marked `<!-- pp-governance-plan:LABEL -->` and truncated at 60,000 characters. `LABEL` is `tenant`, `groups`, `lanes-<cost centre>`, or `lanes-shared`. A pull request that does not touch lanes leaves the previous lanes comments in place.
 
 Composite actions cannot read repository variables. The workflows pass `vars.*` into `.github/actions/terraform` and `.github/actions/require-azure` as inputs.
 
@@ -240,10 +289,9 @@ On the app registration, add three federated credentials. Issuer `https://token.
 | Use | Subject |
 | --- | --- |
 | Plan on a pull request | `repo:ORG/REPO:pull_request` |
-| Apply (GitHub environment `production`) | `repo:ORG/REPO:environment:production` |
-| Nightly drift, and a manual plan dispatched from `main` | `repo:ORG/REPO:ref:refs/heads/main` |
+| Apply and nightly drift | `repo:ORG/REPO:ref:refs/heads/main` |
 
-Create a GitHub environment named `production` and add required reviewers if you want a person to approve apply.
+Create a GitHub environment named `production` and add required reviewers. `apply.yml` selects that environment on a single `approve` job, then runs tenant, groups, and lanes. Those apply jobs do not select the environment, so their OIDC subject is `repo:ORG/REPO:ref:refs/heads/main`. In the dev tenant that credential is `gh-main-immutable`, the same one drift already uses. The `environment:production` subject is unused by these workflows. The `approve` job does not request `id-token: write`.
 
 Pull requests from forks skip the plan job. A fork cannot mint an OIDC token for this repository.
 
@@ -276,8 +324,8 @@ Language is 1033 in the example tfvars. Change `language_code` there for a local
 1. Copy `lanes/customer-service.yaml` to a new file. A subfolder is fine, for example `lanes/finance/payroll.yaml`. Keep every key, including nulls and empty lists. The `lane` value is the Terraform key, not the path, and it must be unique across every file under `lanes/`.
 2. Set `tier` to `sandbox`, `small`, `medium`, `large`, or `exception`.
 3. An `exception` lane must set `exception_expires_on` to a future `YYYY-MM-DD`. Any other tier must leave it null.
-4. Put Entra object ids in `member_object_ids` for the people who should use the environment.
-5. Open a pull request. `scripts/check-lanes.py` runs in CI, and the plan comment shows the new dev environment.
+4. Put Entra object ids in `member_object_ids` for the people who should use a Sandbox or Production environment. A Developer lane has no lane group, so those ids are unused until the lane is switched to Sandbox.
+5. Open a pull request. `scripts/check-lanes.py` runs in CI. The plan comment for that cost centre shows the new dev environment, and the shared plan shows the data policy once the cost centre state exists.
 
 `lanes/operations/field-operations.yaml` shows a lane in a folder. Its key is still `field-operations`. `lanes/customer-service.yaml` stays at the top of `lanes/`. Moving a file does not replace the environment.
 
@@ -303,7 +351,7 @@ What Developer changes:
 
 - The provider (4.2.1, preview for this type) requires `owner_id`, a user object id. The environment is that user's developer environment and counts against the per-user developer environment limit. The owner needs a licence that allows developer environments, such as the Power Apps Developer Plan.
 - The environment still gets Dataverse, the tier's environment group, the pipeline application user, the security role, and the tier data policy.
-- The provider rejects `dataverse.security_group_id` together with `owner_id`, so a Developer environment is **not** restricted to the lane's Entra security group. The group is still created, so switching back to Sandbox reuses it. Access is limited by the developer environment model instead: only the owner, admins, and users the owner shares with get in.
+- The provider rejects `dataverse.security_group_id` together with `owner_id`, so it cannot restrict a Developer environment to an Entra security group. Developer lanes get no lane group. Switching a lane to Sandbox creates one. Access is limited by the developer environment model instead: only the owner, admins, and users the owner shares with get in.
 - The example lanes set `dev_environment_owner_object_id` to `00000000-0000-0000-0000-000000000000`. Replace that placeholder with a user object id from your own tenant before the first apply. After the environment exists, Terraform ignores `owner_id`, so a later edit or this public placeholder does not replace it. Transfer ownership in the Power Platform admin centre instead.
 
 To switch back to Sandbox once the tenant has capacity, delete `dev_environment_type` and `dev_environment_owner_object_id` from the lane file (or set `dev_environment_type: Sandbox` and remove the owner). The environment type forces replacement, and `prevent_destroy` stops that plan. Remove the `lifecycle` block in `modules/lane/main.tf`, read the plan that replaces the dev environment, apply it, and then restore the block. Anything built in the old dev environment is lost unless it is in a solution.
@@ -323,7 +371,7 @@ Two ways to name the group. Neither puts a real id in git.
 
 What a maker sees: the next visit to Copilot Studio, Power Apps, or Power Automate lands in a developer environment they already own, or in a new one created in the Sandbox group. They are an admin of a new environment. If creation fails, they land in the default environment. They can still open other environments afterwards.
 
-The Sandbox data policy is block-by-default. It allows Dataverse, Approvals, Office 365 Users, and SharePoint, and it blocks custom connectors. Sharing in the group is limited to five people and excludes security groups. Solution checker is set to block. Bing search and moving data across regions stay off, so a Copilot that needs those features will not work until you change `tiers/sandbox.yaml`. Provider 4.2.1 attaches a data policy to a list of environment ids, not to the group. The lanes stack adds every environment currently in the Sandbox group on its next apply. Until that apply, a newly routed environment inherits tenant-level data policies only. Group rules apply at once, because they live on the group.
+The Sandbox data policy is block-by-default. It allows Dataverse, Approvals, Office 365 Users, and SharePoint, and it blocks custom connectors. Sharing in the group is limited to five people and excludes security groups. Solution checker is set to block. Bing search and moving data across regions stay off, so a Copilot that needs those features will not work until you change `tiers/sandbox.yaml`. Provider 4.2.1 attaches a data policy to a list of environment ids, not to a group. This stack builds that list from the environments it manages. It does not call `powerplatform_environments`, because that data source reads Dataverse for every environment in the tenant, including Default, and the pipeline service principal is not a member of the Default environment. A routed personal developer environment is not a Terraform resource, so it is not added to the sandbox data policy. It inherits tenant-level data policies. Group rules still apply at once, because they live on the group.
 
 Limits to plan for:
 
@@ -340,12 +388,12 @@ Environments set `prevent_destroy = true` as a literal in `modules/lane/main.tf`
 To destroy environments:
 
 1. Delete the `lifecycle { prevent_destroy = true ... }` block in `modules/lane/main.tf`. Keep the preconditions if you still want them.
-2. Review `terraform plan` in `stacks/lanes`.
-3. `terraform destroy` in `stacks/lanes`. That removes environments, data policies created by this stack, application users, role assignments, and the Entra groups. Destroying an application user deletes it, including one this stack adopted because it already existed. To drop an application user from state without deleting it, `terraform state rm` that address before destroy.
+2. Review `terraform plan` for `lanes/shared.tfstate`, then for each `lanes/<slug>.tfstate`.
+3. `terraform destroy` the shared state first (data policies and fan-in environments), then each cost centre state. That removes environments, data policies created by this stack, application users, role assignments, and the Entra groups. Destroying an application user deletes it, including one this stack adopted because it already existed. To drop an application user from state without deleting it, `terraform state rm` that address before destroy.
 4. `terraform destroy` in `stacks/groups`. That removes groups and rule sets.
 5. `terraform destroy` in `stacks/tenant`. That restores the tenant settings captured at create, and deletes the default-environment data policy and the isolation policy if this stack created them. It does not delete the tenant.
 
-Destroy the lanes stack before the groups stack. A grouped environment can block group deletion.
+Destroy the lanes states before the groups stack. A grouped environment can block group deletion.
 
 `scripts/bootstrap-state.sh` does not delete the storage account.
 
@@ -386,7 +434,7 @@ Checked against provider **4.2.1**. Where the provider has no resource, this rep
 - Creating an environment with `environment_group_id` already set is the path this example uses, and it was untested against a live tenant when the files were written. Confirm the environment lands in the group and is managed.
 - Provider docs say `share_max_limit` must be `-1` when share mode is `no limit`. The 4.2.1 validator requires null instead. This repository sends null. Docs also say solution checker mode `warm`. The validator accepts `warn`.
 - Do not set `environment_group_id` to the empty guid. Provider 4.2.1 treated that as group membership, after which managed-environment settings could not apply. Null omits the attribute.
-- An empty `member_object_ids` list means nobody is in the security group. If Dataverse refuses the pipeline caller, set `pipeline_security_group_object_id` to the enterprise application **object** id so it is added as a member.
+- An empty `member_object_ids` list means nobody is in a Sandbox or Production lane security group. A Developer lane has no lane group, and `dev_security_group_ids` is null for that lane. If Dataverse refuses the pipeline caller, set `pipeline_security_group_object_id` to the enterprise application **object** id so it is added as a member of each Sandbox or Production lane group.
 - Adoption of an existing application user is ownership. Destroy deletes that user.
 - Dataverse grants System Administrator to the identity that creates an environment. When `pipeline_application_id` is also the identity running Terraform (the usual CI setup), the application user already holds that role, and provider 4.2.1 refuses to create the assignment again ("This security role is already assigned to the principal"). With `manage_pipeline_security_role = null` (the default) the lanes stack detects that case and does not declare the assignment, so it is not in state and destroy does not remove it. Set the variable to `true` or `false` to override. With a CLI sign-in as a person, the assignment is created as before.
 - Tenant settings destroy restores the snapshot from create. Deprecated settings (`disable_survey_feedback`, `disable_nps_comments_reachout`, `disable_create_from_image`, `disable_create_from_figma`, `enable_open_ai_bot_publishing`) are left unset on purpose.
@@ -399,7 +447,7 @@ This repo is a learning example that goes with a blog post. It has been applied 
 
 1. **One highly privileged identity.** The single app registration is a Power Platform Administrator and also has Microsoft Graph permission to create groups. Anyone who can get a token for it can change governance across the whole tenant. Split the work: a narrow identity for group creation, a separate identity for Power Platform changes, and the smallest role that can still do each job.
 2. **Pull request plans run as that admin identity.** The `pull_request` federated credential lets any branch in this repository, once it has an open pull request, obtain an admin token during plan. Providers and external data sources can run code during a plan. Use a separate read-only identity for plan, and keep the admin credential on the `production` GitHub environment only.
-3. **The `production` GitHub environment needs protection rules.** Apply jobs set `environment: production`, which selects the `repo:ORG/REPO:environment:production` credential. This repository does not configure required reviewers or a deployment branch rule. Add required reviewers, and limit deployments to `main`. Without those rules the environment name is only a label.
+3. **One approval, then the main-branch credential.** `apply.yml` asks for the `production` environment once, on the `approve` job. Tenant, groups, and every lanes state wait for that job. Apply jobs authenticate as `repo:ORG/REPO:ref:refs/heads/main`. Add required reviewers on `production`, and limit that environment to `main`. This repository does not configure those rules. Without them the environment name is only a label, and a push to `main` applies as soon as the workflow starts.
 4. **Protect `main`.** Require a pull request review and the passing checks, and block force pushes. A push to `main` runs apply, so it has the same reach as the tenant admin identity.
 5. **State storage.** Terraform state can hold environment ids, Dataverse URLs, and group object ids. `scripts/bootstrap-state.sh` now disables shared key access and enables blob versioning and soft delete (14 days for blobs and containers). It also sets TLS 1.2, HTTPS only, and no public blob access, then grants **Storage Blob Data Contributor** on the whole account to the pipeline service principal and, when set, one user. The backend examples and CI set `use_azuread_auth = true` so Terraform uses Entra ID. The role is still read and write on the whole account. Narrow it to named admins if more people should not read state.
 6. **Avoid long-lived client secrets.** The workflows use OIDC and this repo commits no client secret. For a local run, prefer `az login` (`use_cli = true`). If you create a client secret to get unstuck, delete it when the run is done.
@@ -415,7 +463,7 @@ terraform fmt -check -recursive
 ./scripts/validate-all.sh
 ```
 
-`validate-all.sh` installs PyYAML if it is missing, runs the lane self-test and the repository check, checks formatting, and runs `terraform init -backend=false` and `terraform validate` in each stack and in `examples/register-admin-application`.
+`validate-all.sh` installs PyYAML if it is missing, runs the lane, state-split, and repository self-tests, checks formatting, and runs `terraform init -backend=false` and `terraform validate` in each stack and in `examples/register-admin-application`.
 
 `.pre-commit-config.yaml` runs `terraform fmt -recursive`. Commit the `.terraform.lock.hcl` files that init writes. They are not gitignored.
 

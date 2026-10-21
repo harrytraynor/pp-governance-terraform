@@ -20,6 +20,8 @@ except ImportError:
     sys.stderr.write("PyYAML is required. Install it with: python3 -m pip install pyyaml\n")
     sys.exit(1)
 
+from lane_states import SHARED, SLUG_RE, slug, state_key
+
 ROOT = Path(__file__).resolve().parents[1]
 SHARE_MODES = {"no limit", "exclude sharing with security groups"}
 CHECKER_MODES = {"none", "warn", "block"}
@@ -60,13 +62,6 @@ def load_yaml_dir(directory: Path, recursive: bool = False) -> list[tuple[str, d
             raise SystemExit(f"{directory.name}/{relative}: expected a YAML mapping")
         docs.append((relative, data))
     return docs
-
-
-def slug(value: str) -> str:
-    """Match modules/lane: trim, lowercase, spaces and underscores to hyphens, collapse repeats."""
-    text = value.strip().lower().replace(" ", "-").replace("_", "-")
-    text = re.sub(r"-{2,}", "-", text)
-    return text.strip("-")
 
 
 def environment_display_name(cost_centre: str, lane: str, stage: str) -> str:
@@ -226,8 +221,16 @@ def check_lane(name: str, lane: dict, tiers: dict[str, dict], today: dt.date) ->
 
     if not isinstance(lane.get("lane"), str) or not lane["lane"]:
         err("lane must be a non-empty string")
-    if not re.fullmatch(r"CC-[A-Za-z0-9-]+", str(lane.get("cost_centre", ""))):
+    centre = str(lane.get("cost_centre", ""))
+    centre_slug = slug(centre)
+    # "shared" is the fan-in state key, so a lane must not slug to it.
+    # Check that before the CC- shape so the reserved word is the error you see.
+    if centre_slug == SHARED or (centre_slug != "" and not SLUG_RE.fullmatch(centre_slug)):
+        err(f"cost_centre {centre!r} slugs to {centre_slug!r}, which cannot be a state key")
+    elif not re.fullmatch(r"CC-[A-Za-z0-9-]+", centre):
         err("cost_centre must look like CC-0000")
+    elif state_key(centre_slug) != f"lanes/{centre_slug}.tfstate":
+        err("cost_centre state key must be lanes/<slug>.tfstate")
     owner = str(lane.get("owner", ""))
     if "@" not in owner or " " in owner:
         err("owner must be an email-style id with no spaces")
@@ -386,6 +389,11 @@ def self_test() -> None:
     errors, _ = check_lane("developer.yaml", developer, {"small": small_tier}, today)
     if errors:
         raise SystemExit(f"self-test failed: a valid Developer lane was rejected: {errors}")
+    shared_centre = dict(developer)
+    shared_centre["cost_centre"] = "shared"
+    errors, _ = check_lane("shared.yaml", shared_centre, {"small": small_tier}, today)
+    if not any("state key" in item for item in errors):
+        raise SystemExit(f"self-test failed: a cost centre that slugs to shared was accepted: {errors}")
     duplicates = duplicate_lane_errors([
         ("customer-service.yaml", {"lane": "customer-service"}),
         ("finance/customer-service.yaml", {"lane": "customer-service"}),

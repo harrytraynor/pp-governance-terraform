@@ -10,7 +10,7 @@
 #
 # Security group import id: the Entra object id.
 # import {
-#   to = module.dev["customer-service"].azuread_group.this
+#   to = module.dev["customer-service"].azuread_group.this[0]
 #   id = "00000000-0000-0000-0000-000000000000"
 # }
 #
