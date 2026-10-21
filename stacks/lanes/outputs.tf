@@ -9,7 +9,7 @@ output "dev_environment_urls" {
 }
 
 output "dev_security_group_ids" {
-  description = "Lane name to dev security group object id."
+  description = "Lane name to dev security group object id. Null for a Developer lane, which has no lane group."
   value       = { for name, env in module.dev : name => env.security_group_object_id }
 }
 

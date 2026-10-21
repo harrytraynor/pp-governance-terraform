@@ -33,7 +33,7 @@ Read [Security and limitations](#security-and-limitations) before you adapt this
 
 Apply order is **tenant**, then **groups**, then **lanes**. A bad lane plan cannot refresh the tenant stack, because the state files are separate.
 
-With `create_release_stages = false` (the default), the two example lanes produce two dev environments: `cc-0000-customer-service-dev` and `cc-0000-field-operations-dev`. The display name is `<cost centre>-<lane>-<stage>`, built in `modules/lane`. The cost centre and the lane are trimmed, lowercased, and slugified: spaces and underscores become hyphens, and repeated hyphens collapse. A blank cost centre is rejected. Names have to stay unique for each lane and stage, and validation fails when two would slugify to the same name. A shared fan-in environment uses the label `all-lanes`, for example `shared-all-lanes-test`. `name_prefix` is only used on data policy names. Provider 4.2.1 updates `display_name` in place. The Entra group's mail nickname is left as it was, because changing it would replace the group. The example lanes set `dev_environment_type: Developer`; see [Developer dev environments](#developer-dev-environments). Turning the flag on also creates `shared-all-lanes-test`, `shared-all-lanes-prod`, `cc-0000-field-operations-test`, and `cc-0000-field-operations-prod`. Read that plan before you apply it.
+With `create_release_stages = false` (the default), the two example lanes produce two dev environments: `cc-0000-customer-service-dev` and `cc-0000-field-operations-dev`. The display name is `<cost centre>-<lane>-<stage>`, built in `modules/lane`. The cost centre and the lane are trimmed, lowercased, and slugified: spaces and underscores become hyphens, and repeated hyphens collapse. A blank cost centre is rejected. Names have to stay unique for each lane and stage, and validation fails when two would slugify to the same name. A shared fan-in environment uses the label `all-lanes`, for example `shared-all-lanes-test`. `name_prefix` is only used on data policy names. Provider 4.2.1 updates `display_name` in place. The Entra group's mail nickname is left as it was, because changing it would replace the group. A Developer lane does not create a lane security group. The example lanes set `dev_environment_type: Developer`; see [Developer dev environments](#developer-dev-environments). Turning the flag on also creates `shared-all-lanes-test`, `shared-all-lanes-prod`, `cc-0000-field-operations-test`, and `cc-0000-field-operations-prod`. Read that plan before you apply it.
 
 ## Prerequisites
 
@@ -199,13 +199,12 @@ terraform plan
 
 The default plan adds, per example lane:
 
-- an Entra security group
 - a Developer environment with Dataverse, in that tier's group (the example lanes set `dev_environment_type: Developer`; omit that key for Sandbox)
 - an application user
 - a System Administrator security role assignment, unless the pipeline application is the identity running Terraform (see below)
 - a share of a tier data policy (medium for customer-service, large for field-operations)
 
-`member_object_ids` is empty in the examples, so the security group has no members yet. The owner email is recorded on the environment description. It is not looked up in Entra. Add Entra object ids to the lane file before people need to open the environment.
+The example lanes are Developer, so this plan does not create a lane Entra security group. A Sandbox dev lane does. `member_object_ids` is empty in the examples. Those ids are unused while the lane is Developer, and they become group members after a switch to Sandbox. The owner email is recorded on the environment description. It is not looked up in Entra.
 
 `create_release_stages` defaults to false. Set it to true only after you have read the plan that adds test and production.
 
@@ -276,7 +275,7 @@ Language is 1033 in the example tfvars. Change `language_code` there for a local
 1. Copy `lanes/customer-service.yaml` to a new file. A subfolder is fine, for example `lanes/finance/payroll.yaml`. Keep every key, including nulls and empty lists. The `lane` value is the Terraform key, not the path, and it must be unique across every file under `lanes/`.
 2. Set `tier` to `sandbox`, `small`, `medium`, `large`, or `exception`.
 3. An `exception` lane must set `exception_expires_on` to a future `YYYY-MM-DD`. Any other tier must leave it null.
-4. Put Entra object ids in `member_object_ids` for the people who should use the environment.
+4. Put Entra object ids in `member_object_ids` for the people who should use a Sandbox or Production environment. A Developer lane has no lane group, so those ids are unused until the lane is switched to Sandbox.
 5. Open a pull request. `scripts/check-lanes.py` runs in CI, and the plan comment shows the new dev environment.
 
 `lanes/operations/field-operations.yaml` shows a lane in a folder. Its key is still `field-operations`. `lanes/customer-service.yaml` stays at the top of `lanes/`. Moving a file does not replace the environment.
@@ -303,7 +302,7 @@ What Developer changes:
 
 - The provider (4.2.1, preview for this type) requires `owner_id`, a user object id. The environment is that user's developer environment and counts against the per-user developer environment limit. The owner needs a licence that allows developer environments, such as the Power Apps Developer Plan.
 - The environment still gets Dataverse, the tier's environment group, the pipeline application user, the security role, and the tier data policy.
-- The provider rejects `dataverse.security_group_id` together with `owner_id`, so a Developer environment is **not** restricted to the lane's Entra security group. The group is still created, so switching back to Sandbox reuses it. Access is limited by the developer environment model instead: only the owner, admins, and users the owner shares with get in.
+- The provider rejects `dataverse.security_group_id` together with `owner_id`, so it cannot restrict a Developer environment to an Entra security group. Developer lanes get no lane group. Switching a lane to Sandbox creates one. Access is limited by the developer environment model instead: only the owner, admins, and users the owner shares with get in.
 - The example lanes set `dev_environment_owner_object_id` to `00000000-0000-0000-0000-000000000000`. Replace that placeholder with a user object id from your own tenant before the first apply. After the environment exists, Terraform ignores `owner_id`, so a later edit or this public placeholder does not replace it. Transfer ownership in the Power Platform admin centre instead.
 
 To switch back to Sandbox once the tenant has capacity, delete `dev_environment_type` and `dev_environment_owner_object_id` from the lane file (or set `dev_environment_type: Sandbox` and remove the owner). The environment type forces replacement, and `prevent_destroy` stops that plan. Remove the `lifecycle` block in `modules/lane/main.tf`, read the plan that replaces the dev environment, apply it, and then restore the block. Anything built in the old dev environment is lost unless it is in a solution.
@@ -386,7 +385,7 @@ Checked against provider **4.2.1**. Where the provider has no resource, this rep
 - Creating an environment with `environment_group_id` already set is the path this example uses, and it was untested against a live tenant when the files were written. Confirm the environment lands in the group and is managed.
 - Provider docs say `share_max_limit` must be `-1` when share mode is `no limit`. The 4.2.1 validator requires null instead. This repository sends null. Docs also say solution checker mode `warm`. The validator accepts `warn`.
 - Do not set `environment_group_id` to the empty guid. Provider 4.2.1 treated that as group membership, after which managed-environment settings could not apply. Null omits the attribute.
-- An empty `member_object_ids` list means nobody is in the security group. If Dataverse refuses the pipeline caller, set `pipeline_security_group_object_id` to the enterprise application **object** id so it is added as a member.
+- An empty `member_object_ids` list means nobody is in a Sandbox or Production lane security group. A Developer lane has no lane group, and `dev_security_group_ids` is null for that lane. If Dataverse refuses the pipeline caller, set `pipeline_security_group_object_id` to the enterprise application **object** id so it is added as a member of each Sandbox or Production lane group.
 - Adoption of an existing application user is ownership. Destroy deletes that user.
 - Dataverse grants System Administrator to the identity that creates an environment. When `pipeline_application_id` is also the identity running Terraform (the usual CI setup), the application user already holds that role, and provider 4.2.1 refuses to create the assignment again ("This security role is already assigned to the principal"). With `manage_pipeline_security_role = null` (the default) the lanes stack detects that case and does not declare the assignment, so it is not in state and destroy does not remove it. Set the variable to `true` or `false` to override. With a CLI sign-in as a person, the assignment is created as before.
 - Tenant settings destroy restores the snapshot from create. Deprecated settings (`disable_survey_feedback`, `disable_nps_comments_reachout`, `disable_create_from_image`, `disable_create_from_figma`, `enable_open_ai_bot_publishing`) are left unset on purpose.

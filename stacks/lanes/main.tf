@@ -108,6 +108,8 @@ locals {
     var.security_role_name == "System Administrator"
   )
 
+  # Added to a Sandbox or Production lane group. A Developer lane has no group,
+  # so the dev module passes an empty member list and ignores this value.
   extra_members = var.pipeline_security_group_object_id != null && var.pipeline_security_group_object_id != "" ? [var.pipeline_security_group_object_id] : []
 
   # Names come from modules/lane. The tier is not part of the name, so two
@@ -157,11 +159,6 @@ resource "terraform_data" "lane_rules" {
       condition     = var.group_ids != null || local.backend_configured || alltrue([for lane in local.lanes : lane.outside_group])
       error_message = "Set group_ids (local groups state) or backend_resource_group_name, backend_storage_account_name, and backend_container_name (remote groups state)."
     }
-  }
-}
-
-resource "terraform_data" "display_names" {
-  lifecycle {
     precondition {
       condition     = length(local.duplicate_display_names) == 0
       error_message = "Environment display names must stay unique per lane and stage. These collide: ${join(", ", local.duplicate_display_names)}. The name is <cost centre>-<lane>-<stage> and no longer includes the tier."
@@ -189,7 +186,7 @@ module "dev" {
   pipeline_application_id         = var.pipeline_application_id
   security_role_name              = var.security_role_name
   manage_security_role_assignment = local.manage_pipeline_role
-  member_object_ids               = distinct(concat(each.value.member_object_ids, local.extra_members))
+  member_object_ids               = local.dev_environment_types[each.key] == "Developer" ? [] : distinct(concat(each.value.member_object_ids, local.extra_members))
   owner_object_ids                = var.security_group_owner_object_ids
   environment_group_id            = each.value.outside_group ? null : try(local.group_ids[each.value.tier], null)
   manage_with_managed_environment = each.value.outside_group

@@ -14,8 +14,8 @@ output "environment_url" {
 }
 
 output "security_group_object_id" {
-  description = "Entra object id of the environment security group."
-  value       = azuread_group.this.object_id
+  description = "Entra object id of the lane security group. Null when environment_type is Developer, because that lane has no group."
+  value       = one(azuread_group.this[*].object_id)
 }
 
 output "application_user_id" {

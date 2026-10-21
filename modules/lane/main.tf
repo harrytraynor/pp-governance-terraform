@@ -23,7 +23,12 @@ locals {
   }
 }
 
+# Provider 4.2.1 rejects security_group_id together with owner_id, so a Developer
+# environment cannot be restricted to a lane group. The group is not created.
+# Switching the lane to Sandbox or Production creates one.
 resource "azuread_group" "this" {
+  count = var.environment_type == "Developer" ? 0 : 1
+
   display_name     = local.display_name
   description      = substr(var.description, 0, 1024)
   security_enabled = true
@@ -37,9 +42,11 @@ resource "azuread_group" "this" {
 }
 
 resource "azuread_group_member" "member" {
-  for_each = toset(var.member_object_ids)
+  # Same keys as before for Sandbox and Production, so existing memberships stay.
+  # Developer has no group, so this set is empty and those memberships are removed.
+  for_each = var.environment_type == "Developer" ? toset([]) : toset(var.member_object_ids)
 
-  group_object_id  = azuread_group.this.object_id
+  group_object_id  = azuread_group.this[0].object_id
   member_object_id = each.value
 }
 
@@ -61,10 +68,9 @@ resource "powerplatform_environment" "this" {
   dataverse = {
     language_code = var.language_code
     currency_code = var.currency_code
-    # Provider 4.2.1 rejects security_group_id together with owner_id, so a
-    # Developer environment is not restricted to the lane group. The group is
-    # still created, so switching the lane back to Sandbox keeps the same group.
-    security_group_id = var.environment_type == "Developer" ? null : azuread_group.this.object_id
+    # Developer has no lane group. one() is null when count is 0, and the
+    # group id when a Sandbox or Production lane created azuread_group.this[0].
+    security_group_id = one(azuread_group.this[*].object_id)
   }
 
   timeouts = {
@@ -139,4 +145,13 @@ resource "powerplatform_security_role_assignment" "pipeline" {
 moved {
   from = powerplatform_security_role_assignment.pipeline
   to   = powerplatform_security_role_assignment.pipeline[0]
+}
+
+# Sandbox and Production lanes already have an unindexed group in state.
+# Count addresses it as [0]. Without this move, Terraform would destroy the
+# group and create a new one. Memberships stay at azuread_group_member.member["<object id>"],
+# so a Sandbox or Production lane does not lose or recreate them either.
+moved {
+  from = azuread_group.this
+  to   = azuread_group.this[0]
 }
