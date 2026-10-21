@@ -9,6 +9,8 @@ The shape of the model (tiers, lanes, firm checks, and state split by blast radi
 
 This repository is a smaller cut of that idea, limited to what the official `microsoft/power-platform` provider can apply today. Provider version is pinned to **4.2.1**.
 
+Read [Security and limitations](#security-and-limitations) before you adapt this beyond a dev tenant.
+
 ## Layout
 
 | Path | What it holds |
@@ -358,6 +360,20 @@ Checked against provider **4.2.1**. Where the provider has no resource, this rep
 - Tenant settings destroy restores the snapshot from create. Deprecated settings (`disable_survey_feedback`, `disable_nps_comments_reachout`, `disable_create_from_image`, `disable_create_from_figma`, `enable_open_ai_bot_publishing`) are left unset on purpose.
 - The default-environment data policy stays off until `manage_default_environment_dlp` is true. It is `OnlyEnvironments` on the environment whose type is `Default`.
 - `powerplatform_tenant_isolation_policy` is a real resource, and it is not in the tenant stack. Provider 4.2.1 fails `terraform validate` when `allowed_tenants` is unknown, which is what a variable or a `count` of zero produces during validate. `examples/tenant-isolation` keeps `is_disabled = true` and an empty allow list as literals. Edit those arguments and apply that root on its own when you intend to manage cross-tenant isolation. Read the plan first. The GitHub workflows do not apply it.
+
+## Security and limitations
+
+This repo is a learning example that goes with a blog post. It has been applied to a real dev tenant, but it isn't hardened for production, so review the points below before adapting it.
+
+1. **One highly privileged identity.** The single app registration is a Power Platform Administrator and also has Microsoft Graph permission to create groups. Anyone who can get a token for it can change governance across the whole tenant. Split the work: a narrow identity for group creation, a separate identity for Power Platform changes, and the smallest role that can still do each job.
+2. **Pull request plans run as that admin identity.** The `pull_request` federated credential lets any branch in this repository, once it has an open pull request, obtain an admin token during plan. Providers and external data sources can run code during a plan. Use a separate read-only identity for plan, and keep the admin credential on the `production` GitHub environment only.
+3. **The `production` GitHub environment needs protection rules.** Apply jobs set `environment: production`, which selects the `repo:ORG/REPO:environment:production` credential. This repository does not configure required reviewers or a deployment branch rule. Add required reviewers, and limit deployments to `main`. Without those rules the environment name is only a label.
+4. **Protect `main`.** Require a pull request review and the passing checks, and block force pushes. A push to `main` runs apply, so it has the same reach as the tenant admin identity.
+5. **State storage.** Terraform state can hold environment ids, Dataverse URLs, and group object ids. `scripts/bootstrap-state.sh` creates a StorageV2 account (Standard_LRS, TLS 1.2, blob public access disabled), a private container, and **Storage Blob Data Contributor** on the whole account for the pipeline service principal. If `USER_ASSIGNEE_OBJECT_ID` is set, that user gets the same role. The script does not disable shared key access (Azure leaves it enabled), and it does not turn on blob versioning or soft delete. Prefer Entra-only auth with shared key access disabled, versioning, soft delete, and RBAC limited to the pipeline identity and named admins.
+6. **Avoid long-lived client secrets.** The workflows use OIDC and this repo commits no client secret. For a local run, prefer `az login` (`use_cli = true`). If you create a client secret to get unstuck, delete it when the run is done.
+7. **Supply chain.** GitHub Actions are pinned to tags, not commit SHAs: `actions/checkout@v4`, `hashicorp/setup-terraform@v3`, `azure/login@v2`, `actions/github-script@v7`, and `actions/upload-artifact@v4`. Pin those actions to SHAs before you trust the workflows with a real tenant. Terraform lock files are already committed for `stacks/tenant`, `stacks/groups`, `stacks/lanes`, `examples/register-admin-application`, and `examples/tenant-isolation`.
+8. **Keep drift plan-only and read-only.** `drift.yml` runs `terraform plan -detailed-exitcode` and opens or closes an issue. It does not apply. It still authenticates as the same admin app, with the `ref:refs/heads/main` credential. Leave the workflow on plan, and move it to a read-only identity.
+9. **Scope.** The example lanes use Developer environments because the test tenant had no paid Dataverse capacity. The DLP tiers and environment group rules are illustrative, not a recommended baseline. This is not a replacement for Microsoft admin tooling or Agent 365. Provider gaps are listed under [Known limitations](#known-limitations).
 
 ## Formatting
 
