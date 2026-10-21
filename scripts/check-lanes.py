@@ -62,6 +62,62 @@ def load_yaml_dir(directory: Path, recursive: bool = False) -> list[tuple[str, d
     return docs
 
 
+def slug(value: str) -> str:
+    """Match modules/lane: trim, lowercase, spaces and underscores to hyphens, collapse repeats."""
+    text = value.strip().lower().replace(" ", "-").replace("_", "-")
+    text = re.sub(r"-{2,}", "-", text)
+    return text.strip("-")
+
+
+def environment_display_name(cost_centre: str, lane: str, stage: str) -> str:
+    return f"{slug(cost_centre)}-{slug(lane)}-{stage}"
+
+
+def display_name_errors(docs: list[tuple[str, dict]], tiers: dict[str, dict]) -> list[str]:
+    """Fail when two environments would share a name now that the tier is omitted."""
+    owners: dict[str, str] = {}
+    errors: list[str] = []
+    fan_in: dict[str, str] = {}
+
+    def claim(name: str, source: str) -> None:
+        previous = owners.get(name)
+        if previous is not None:
+            errors.append(
+                f"{source}: display name {name} collides with {previous}. "
+                "Names are <cost centre>-<lane>-<stage> and must stay unique per lane and stage."
+            )
+        else:
+            owners[name] = source
+
+    for filename, lane in docs:
+        if not isinstance(lane, dict):
+            continue
+        lane_name = lane.get("lane")
+        cost_centre = lane.get("cost_centre")
+        if not isinstance(lane_name, str) or not lane_name or not isinstance(cost_centre, str):
+            continue
+        source = f"lanes/{filename}"
+        if slug(cost_centre) == "" or slug(lane_name) == "":
+            errors.append(f"{source}: cost centre and lane must still contain a letter or digit after slugifying")
+            continue
+        claim(environment_display_name(cost_centre, lane_name, "dev"), source)
+        tier_name = lane.get("tier")
+        tier = tiers.get(tier_name) if isinstance(tier_name, str) else None
+        if not isinstance(tier, dict) or lane.get("outside_group") is True:
+            continue
+        release = tier.get("release") or {}
+        if release.get("dedicated_prod"):
+            claim(environment_display_name(cost_centre, lane_name, "test"), f"{source} test")
+            claim(environment_display_name(cost_centre, lane_name, "prod"), f"{source} prod")
+        elif release.get("fan_in"):
+            fan_in.setdefault(str(tier_name), source)
+
+    for tier_name, source in fan_in.items():
+        claim("shared-all-lanes-test", f"{source} (shared fan-in tier {tier_name})")
+        claim("shared-all-lanes-prod", f"{source} (shared fan-in tier {tier_name})")
+    return errors
+
+
 def duplicate_lane_errors(docs: list[tuple[str, dict]]) -> list[str]:
     seen: dict[str, str] = {}
     errors: list[str] = []
@@ -255,6 +311,7 @@ def check_repository(root: Path, today: dt.date | None = None) -> tuple[list[str
         errors.extend(found)
         warnings.extend(notes)
     errors.extend(duplicate_lane_errors(lane_docs))
+    errors.extend(display_name_errors(lane_docs, tiers))
     if not lane_docs:
         errors.append("lanes/: add at least one lane file")
     return errors, warnings
@@ -340,6 +397,40 @@ def self_test() -> None:
         ("operations/field-operations.yaml", {"lane": "field-operations"}),
     ]):
         raise SystemExit("self-test failed: distinct lane names in different folders were rejected")
+
+    fan_in_tier = {"release": {"fan_in": True, "dedicated_prod": False}}
+    dedicated_tier = {"release": {"fan_in": False, "dedicated_prod": True}}
+    collided = display_name_errors(
+        [
+            ("a.yaml", {"lane": "foo-bar", "cost_centre": "CC-AB", "tier": "medium", "outside_group": False}),
+            ("b.yaml", {"lane": "bar", "cost_centre": "CC-AB-foo", "tier": "medium", "outside_group": False}),
+        ],
+        {"medium": fan_in_tier},
+    )
+    if not any("cc-ab-foo-bar-dev" in item for item in collided):
+        raise SystemExit(f"self-test failed: slugified display names were not reported as a collision: {collided}")
+    distinct = display_name_errors(
+        [
+            ("customer-service.yaml", {"lane": "customer-service", "cost_centre": "CC-0000", "tier": "medium", "outside_group": False}),
+            ("operations/field-operations.yaml", {"lane": "field-operations", "cost_centre": "CC-0000", "tier": "large", "outside_group": False}),
+        ],
+        {"medium": fan_in_tier, "large": dedicated_tier},
+    )
+    if distinct:
+        raise SystemExit(f"self-test failed: example display names were rejected: {distinct}")
+    if environment_display_name("  CC  0000 ", "customer_service", "dev") != "cc-0000-customer-service-dev":
+        raise SystemExit("self-test failed: cost centre slug did not match cc-0000-customer-service-dev")
+    if environment_display_name("shared", "all-lanes", "test") != "shared-all-lanes-test":
+        raise SystemExit("self-test failed: shared fan-in name was not shared-all-lanes-test")
+    shared_collision = display_name_errors(
+        [
+            ("small.yaml", {"lane": "billing", "cost_centre": "CC-0001", "tier": "small", "outside_group": False}),
+            ("medium.yaml", {"lane": "claims", "cost_centre": "CC-0002", "tier": "medium", "outside_group": False}),
+        ],
+        {"small": fan_in_tier, "medium": fan_in_tier},
+    )
+    if not any("shared-all-lanes-test" in item for item in shared_collision):
+        raise SystemExit(f"self-test failed: two fan-in tiers were allowed to share a name: {shared_collision}")
     print("self-test passed")
 
 

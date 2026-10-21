@@ -1,9 +1,12 @@
 data "azuread_client_config" "current" {}
 
 locals {
-  # <cost centre> - <lane> - <tier> - <stage>
+  # <cost centre>-<lane>-<stage>, lowercase, hyphens, no spaces.
+  # Trim, turn spaces and underscores into hyphens, then collapse repeats.
   # Provider 4.2.1 does not force replacement when display_name changes.
-  display_name = "${trimspace(var.cost_centre)} - ${trimspace(var.name_label)} - ${trimspace(var.tier)} - ${var.stage}"
+  cost_centre_slug = trim(replace(replace(replace(lower(trimspace(var.cost_centre)), " ", "-"), "_", "-"), "/-+/", "-"), "-")
+  name_label_slug  = trim(replace(replace(replace(lower(trimspace(var.name_label)), " ", "-"), "_", "-"), "/-+/", "-"), "-")
+  display_name     = "${local.cost_centre_slug}-${local.name_label_slug}-${var.stage}"
 
   # Stable alias for new groups. Existing groups keep the alias already in state
   # (ignore_changes below). Changing mail_nickname would replace the Entra group.
@@ -82,6 +85,10 @@ resource "powerplatform_environment" "this" {
     prevent_destroy = true
     ignore_changes  = [owner_id]
 
+    precondition {
+      condition     = local.cost_centre_slug != "" && local.name_label_slug != ""
+      error_message = "Environment display name needs a cost centre and a lane that still contain a letter or digit after slugifying. A blank cost centre is rejected."
+    }
     precondition {
       condition     = (var.location != null && var.macro_region == null) || (var.location == null && var.macro_region != null)
       error_message = "Environment ${local.display_name} needs exactly one of location or macro_region."

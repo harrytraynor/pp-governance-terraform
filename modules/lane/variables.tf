@@ -1,6 +1,6 @@
 variable "name_label" {
   type        = string
-  description = "Lane name, or all-lanes for a shared fan-in environment. Combined with the cost centre, tier, and stage into the display name."
+  description = "Lane name, or all-lanes for a shared fan-in environment. Slugified with the cost centre and stage into the display name."
 
   validation {
     condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9 ._-]{0,40}$", trimspace(var.name_label)))
@@ -82,7 +82,7 @@ variable "environment_group_id" {
 
 variable "cost_centre" {
   type        = string
-  description = "Cost centre. First segment of the environment display name. Blank is rejected. Lane files use CC-0000. Shared environments use shared."
+  description = "Cost centre. First segment of the environment display name, after it is trimmed, lowercased, and slugified. Blank is rejected. Lane files use CC-0000, which becomes cc-0000. Shared environments use shared."
 
   validation {
     condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9 ._-]{0,40}$", trimspace(var.cost_centre)))
@@ -97,11 +97,11 @@ variable "owner" {
 
 variable "tier" {
   type        = string
-  description = "Tier name. Third segment of the environment display name."
+  description = "Tier name. Recorded for group membership and release shape. Not part of the display name."
 
   validation {
     condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9 ._-]{0,40}$", trimspace(var.tier)))
-    error_message = "tier is required for the display name."
+    error_message = "tier is required."
   }
 }
 

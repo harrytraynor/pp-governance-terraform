@@ -1,5 +1,5 @@
 output "display_name" {
-  description = "Environment and security group display name: cost centre, lane, tier, then stage."
+  description = "Environment and security group display name: slugified cost centre, lane, then stage."
   value       = local.display_name
 }
 

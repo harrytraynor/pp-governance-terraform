@@ -109,6 +109,20 @@ locals {
   )
 
   extra_members = var.pipeline_security_group_object_id != null && var.pipeline_security_group_object_id != "" ? [var.pipeline_security_group_object_id] : []
+
+  # Names come from modules/lane. The tier is not part of the name, so two
+  # fan-in tiers, or two lanes that slugify the same way, would collide.
+  created_display_names = concat(
+    [for _, env in module.dev : env.display_name],
+    [for _, env in module.shared_test : env.display_name],
+    [for _, env in module.shared_prod : env.display_name],
+    [for _, env in module.dedicated_test : env.display_name],
+    [for _, env in module.dedicated_prod : env.display_name],
+  )
+  duplicate_display_names = [
+    for name in toset(local.created_display_names) : name
+    if length([for candidate in local.created_display_names : candidate if candidate == name]) > 1
+  ]
 }
 
 resource "terraform_data" "lane_rules" {
@@ -142,6 +156,15 @@ resource "terraform_data" "lane_rules" {
     precondition {
       condition     = var.group_ids != null || local.backend_configured || alltrue([for lane in local.lanes : lane.outside_group])
       error_message = "Set group_ids (local groups state) or backend_resource_group_name, backend_storage_account_name, and backend_container_name (remote groups state)."
+    }
+  }
+}
+
+resource "terraform_data" "display_names" {
+  lifecycle {
+    precondition {
+      condition     = length(local.duplicate_display_names) == 0
+      error_message = "Environment display names must stay unique per lane and stage. These collide: ${join(", ", local.duplicate_display_names)}. The name is <cost centre>-<lane>-<stage> and no longer includes the tier."
     }
   }
 }
