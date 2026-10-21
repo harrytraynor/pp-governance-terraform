@@ -40,6 +40,9 @@ LANE_KEYS = {
     "member_object_ids",
 }
 
+# Optional lane keys. A lane that omits them gets a Sandbox dev environment.
+DEV_ENVIRONMENT_TYPES = {"Sandbox", "Developer"}
+
 GUID_RE = re.compile(GUID)
 
 
@@ -160,6 +163,16 @@ def check_lane(name: str, lane: dict, tiers: dict[str, dict], today: dt.date) ->
         for member in members:
             if not isinstance(member, str) or not GUID_RE.fullmatch(member):
                 err(f"member_object_ids entry is not an object id: {member!r}")
+
+    dev_type = lane.get("dev_environment_type") or "Sandbox"
+    dev_owner = lane.get("dev_environment_owner_object_id")
+    if dev_type not in DEV_ENVIRONMENT_TYPES:
+        err(f"dev_environment_type must be one of {', '.join(sorted(DEV_ENVIRONMENT_TYPES))}")
+    elif dev_type == "Developer":
+        if not isinstance(dev_owner, str) or not GUID_RE.fullmatch(dev_owner):
+            err("dev_environment_type Developer requires dev_environment_owner_object_id (an Entra user object id)")
+    elif dev_owner is not None:
+        err("dev_environment_owner_object_id is only valid when dev_environment_type is Developer")
 
     triggers = lane.get("triggers")
     if not isinstance(triggers, dict) or not isinstance(triggers.get("access"), bool) or not isinstance(triggers.get("complexity"), bool):
@@ -287,6 +300,16 @@ def self_test() -> None:
     _, warnings = check_lane("small.yaml", small, {"small": small_tier}, today)
     if not warnings:
         raise SystemExit("self-test failed: an access trigger on small produced no warning")
+    developer = dict(small)
+    developer["triggers"] = {"access": False, "complexity": False}
+    developer["dev_environment_type"] = "Developer"
+    errors, _ = check_lane("developer.yaml", developer, {"small": small_tier}, today)
+    if not any("dev_environment_owner_object_id" in item for item in errors):
+        raise SystemExit("self-test failed: a Developer lane without an owner was accepted")
+    developer["dev_environment_owner_object_id"] = "00000000-0000-0000-0000-000000000001"
+    errors, _ = check_lane("developer.yaml", developer, {"small": small_tier}, today)
+    if errors:
+        raise SystemExit(f"self-test failed: a valid Developer lane was rejected: {errors}")
     print("self-test passed")
 
 

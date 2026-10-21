@@ -38,14 +38,20 @@ resource "powerplatform_environment" "this" {
   environment_type = var.environment_type
   cadence          = var.cadence
 
+  # Provider 4.2.1 requires owner_id for Developer and rejects it for every other type.
+  owner_id = var.environment_type == "Developer" ? var.owner_id : null
+
   # Null is omitted. Do not send the empty guid: provider 4.2.1 used to treat
   # that as group membership and then managed-environment settings could never apply.
   environment_group_id = var.environment_group_id
 
   dataverse = {
-    language_code     = var.language_code
-    currency_code     = var.currency_code
-    security_group_id = azuread_group.this.object_id
+    language_code = var.language_code
+    currency_code = var.currency_code
+    # Provider 4.2.1 rejects security_group_id together with owner_id, so a
+    # Developer environment is not restricted to the lane group. The group is
+    # still created, so switching the lane back to Sandbox keeps the same group.
+    security_group_id = var.environment_type == "Developer" ? null : azuread_group.this.object_id
   }
 
   timeouts = {
@@ -64,6 +70,10 @@ resource "powerplatform_environment" "this" {
     precondition {
       condition     = (var.location != null && var.macro_region == null) || (var.location == null && var.macro_region != null)
       error_message = "Environment ${var.name} needs exactly one of location or macro_region."
+    }
+    precondition {
+      condition     = var.environment_type != "Developer" || var.owner_id != null
+      error_message = "Environment ${var.name} is a Developer environment and needs owner_id (an Entra user object id)."
     }
     precondition {
       condition     = var.manage_with_managed_environment ? var.environment_group_id == null && var.managed_environment != null : var.environment_group_id != null
@@ -92,8 +102,19 @@ resource "powerplatform_application_user" "pipeline" {
   application_id = var.pipeline_application_id
 }
 
+# Dataverse grants System Administrator to the identity that creates the
+# environment. When that identity is also the pipeline application, the grant
+# already exists and the provider refuses to create it again, so the caller
+# turns this off.
 resource "powerplatform_security_role_assignment" "pipeline" {
+  count = var.manage_security_role_assignment ? 1 : 0
+
   environment_id     = powerplatform_environment.this.id
   system_user_id     = powerplatform_application_user.pipeline.system_user_id
   security_role_name = var.security_role_name
+}
+
+moved {
+  from = powerplatform_security_role_assignment.pipeline
+  to   = powerplatform_security_role_assignment.pipeline[0]
 }

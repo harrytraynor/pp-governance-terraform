@@ -73,6 +73,13 @@ variable "security_role_name" {
   default     = "System Administrator"
 }
 
+variable "manage_pipeline_security_role" {
+  type        = bool
+  description = "Create the pipeline application user's security role assignment. Null decides automatically: false when pipeline_application_id is the identity running Terraform and security_role_name is System Administrator, because Dataverse already grants that role to the environment creator; true otherwise."
+  default     = null
+  nullable    = true
+}
+
 variable "pipeline_security_group_object_id" {
   type        = string
   description = "Optional enterprise-application object id added as a member of every environment security group. This is not the client id. Leave null unless Dataverse refuses the caller."

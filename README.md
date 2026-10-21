@@ -31,7 +31,7 @@ This repository is a smaller cut of that idea, limited to what the official `mic
 
 Apply order is **tenant**, then **groups**, then **lanes**. A bad lane plan cannot refresh the tenant stack, because the state files are separate.
 
-With `create_release_stages = false` (the default), the two example lanes produce two Sandbox dev environments: `ppgov-customer-service-dev` (medium) and `ppgov-field-operations-dev` (large). Turning the flag on also creates the shared medium test and production environments, and the dedicated field-operations test and production environments. Read that plan before you apply it.
+With `create_release_stages = false` (the default), the two example lanes produce two dev environments: `ppgov-customer-service-dev` (medium) and `ppgov-field-operations-dev` (large). The example lanes set `dev_environment_type: Developer`; see [Developer dev environments](#developer-dev-environments). Turning the flag on also creates the shared medium test and production environments, and the dedicated field-operations test and production environments. Read that plan before you apply it.
 
 ## Prerequisites
 
@@ -40,12 +40,12 @@ You need:
 - Terraform 1.6 or newer. The workflows pin 1.16.6.
 - Azure CLI, for the local sign-in and for `scripts/bootstrap-state.sh`.
 - Python 3 with PyYAML (`python3 -m pip install pyyaml`), for `scripts/check-lanes.py`.
-- A Power Platform dev or test tenant with a licence that covers managed environments. Environment groups require managed environments.
+- A Power Platform dev or test tenant with a licence that covers managed environments. Environment groups require managed environments. Each Sandbox environment with Dataverse also needs at least 1 GB of free **paid** Dataverse database capacity. Developer, viral trial, and M365 E5 developer licences add none, and the create fails with HTTP 409 `InsufficientCapacity_StorageDriven`.
 - An Azure subscription for the Terraform state storage account, if you use the `azurerm` backend. A first local plan can use the local backend instead. See below.
 
 ### App registration
 
-Create an Entra app registration and a service principal. Then grant **application** permissions and grant admin consent:
+Create an Entra app registration and a service principal. Add these API permissions and grant admin consent. The Dynamics CRM, Power Platform API, and PowerApps Service entries are **delegated** scopes (those APIs publish no matching application roles; service principal access comes from the Power Platform admin registration below). Microsoft Graph `Group.ReadWrite.All` must be an **application** permission:
 
 - Dynamics CRM: `user_impersonation`
 - Power Platform API (`8578e004-a5c6-46e7-913e-12f58912df43`):
@@ -58,8 +58,8 @@ Create an Entra app registration and a service principal. Then grant **applicati
   - `EnvironmentManagement.Environments.Read`
   - `EnvironmentManagement.Groups.ReadWrite`
   - `EnvironmentManagement.Settings.ReadWrite`
-- PowerApps Service: `User`
-- Microsoft Graph: `Group.ReadWrite.All` (the lanes stack creates Entra security groups; the provider guide does not list this permission)
+- PowerApps Service (`475226c6-020e-4fb2-8a90-7a972cbfc1d4`): `User`
+- Microsoft Graph: `Group.ReadWrite.All`, application permission (the lanes stack creates Entra security groups; the provider guide does not list this permission)
 
 If Power Platform API does not appear when you search by name, instantiate it in the tenant:
 
@@ -67,6 +67,12 @@ If Power Platform API does not appear when you search by name, instantiate it in
 Install-Module AzureAD
 Connect-AzureAD
 New-AzureADServicePrincipal -AppId 8578e004-a5c6-46e7-913e-12f58912df43 -DisplayName "Power Platform API"
+```
+
+Or with the Azure CLI (the AzureAD module is retired):
+
+```bash
+az ad sp create --id 8578e004-a5c6-46e7-913e-12f58912df43
 ```
 
 For a local plan with `use_cli = true`, preauthorise the Azure CLI client application `04b07795-8ddb-461a-bbee-02f9e1bf7b46` on the app registration, as described in the provider's [app registration guide](https://registry.terraform.io/providers/microsoft/power-platform/4.2.1/docs/guides/app_registration).
@@ -117,10 +123,11 @@ export TF_STATE_RESOURCE_GROUP=rg-REPLACE-tfstate
 export TF_STATE_STORAGE_ACCOUNT=streplace1234   # 3-24 lowercase letters and digits
 export TF_STATE_CONTAINER=tfstate
 export ASSIGNEE_OBJECT_ID=YOUR-ENTERPRISE-APP-OBJECT-ID
+export USER_ASSIGNEE_OBJECT_ID=YOUR-USER-OBJECT-ID   # optional, for local CLI runs
 ./scripts/bootstrap-state.sh
 ```
 
-`ASSIGNEE_OBJECT_ID` is the enterprise application object id. The script grants that principal **Storage Blob Data Contributor**. It does not delete anything.
+`ASSIGNEE_OBJECT_ID` is the enterprise application object id. The script grants that principal **Storage Blob Data Contributor**, and grants the same role to `USER_ASSIGNEE_OBJECT_ID` when it is set. It does not delete anything. Azure enforces MFA on resource writes, so the CLI session that runs the script must be an MFA sign-in.
 
 In each of `stacks/tenant`, `stacks/groups`, and `stacks/lanes`:
 
@@ -186,9 +193,9 @@ terraform plan
 The default plan adds, per example lane:
 
 - an Entra security group
-- a Sandbox environment with Dataverse, in that tier's group
+- a Developer environment with Dataverse, in that tier's group (the example lanes set `dev_environment_type: Developer`; omit that key for Sandbox)
 - an application user
-- a System Administrator security role assignment
+- a System Administrator security role assignment, unless the pipeline application is the identity running Terraform (see below)
 - a share of a tier data policy (medium for customer-service, large for field-operations)
 
 `member_object_ids` is empty in the examples, so the security group has no members yet. The owner email is recorded on the environment description. It is not looked up in Entra. Add Entra object ids to the lane file before people need to open the environment.
@@ -264,12 +271,32 @@ Language is 1033 in the example tfvars. Change `language_code` there for a local
 4. Put Entra object ids in `member_object_ids` for the people who should use the environment.
 5. Open a pull request. `scripts/check-lanes.py` runs in CI, and the plan comment shows the new dev environment.
 
+Two optional keys choose the dev environment type:
+
+- `dev_environment_type`: `Sandbox` (the default when the key is missing or null) or `Developer`.
+- `dev_environment_owner_object_id`: the Entra **user** object id that owns a Developer environment. Required for `Developer`, and must be null or absent for `Sandbox`.
+
+Test and production environments are always Sandbox and Production. These keys only change the dev stage.
+
 `outside_group: true` is supported only when the tier file has an `ungrouped_managed_environment` block. Only `tiers/exception.yaml` has one. Grouped lanes must not use `powerplatform_managed_environment`. See the limitations below.
 
 Advisory warnings, which do not fail the check:
 
 - `triggers.access: true` on sandbox or small
 - `triggers.complexity: true` on anything other than large or exception
+
+## Developer dev environments
+
+The example lanes use `dev_environment_type: Developer` because the dev tenant this repository was first applied to has no paid Dataverse database capacity. A Sandbox environment with Dataverse needs at least 1 GB free, and the create fails with HTTP 409 `InsufficientCapacity_StorageDriven`. A Developer environment does not draw on tenant database capacity.
+
+What Developer changes:
+
+- The provider (4.2.1, preview for this type) requires `owner_id`, a user object id. The environment is that user's developer environment and counts against the per-user developer environment limit. The owner needs a licence that allows developer environments, such as the Power Apps Developer Plan.
+- The environment still gets Dataverse, the tier's environment group, the pipeline application user, the security role, and the tier data policy.
+- The provider rejects `dataverse.security_group_id` together with `owner_id`, so a Developer environment is **not** restricted to the lane's Entra security group. The group is still created, so switching back to Sandbox reuses it. Access is limited by the developer environment model instead: only the owner, admins, and users the owner shares with get in.
+- The example lanes set `dev_environment_owner_object_id` to `00000000-0000-0000-0000-000000000000`. Replace that placeholder with a user object id from your own tenant before you apply.
+
+To switch back to Sandbox once the tenant has capacity, delete `dev_environment_type` and `dev_environment_owner_object_id` from the lane file (or set `dev_environment_type: Sandbox` and remove the owner). The environment type and `owner_id` both force replacement, and `prevent_destroy` stops that plan. Remove the `lifecycle` block in `modules/lane/main.tf`, read the plan that replaces the dev environment, apply it, and then restore the block. Anything built in the old dev environment is lost unless it is in a solution.
 
 ## Tear down
 
@@ -315,7 +342,7 @@ Checked against provider **4.2.1**. Where the provider has no resource, this rep
 - A setting with no group rule stays at environment level. This repository does not push those settings onto a grouped environment.
 - There is no resource for Power Platform Pipelines.
 - There is no resource for prepaid Copilot credit allocation. `powerplatform_billing_policy` is pay-as-you-go Azure billing. It is not wired up.
-- Environment type `Developer` is preview and needs an `owner_id`. This repository does not create that type. If you later turn on default-environment routing, the personal developer environments that routing creates are outside this state. Routing forces `disable_developer_environment_creation_by_non_admin_users` to false so makers can receive them.
+- Environment type `Developer` is preview and needs an `owner_id`. The example lanes use it for dev only (see above). If you later turn on default-environment routing, the personal developer environments that routing creates are outside this state. Routing forces `disable_developer_environment_creation_by_non_admin_users` to false so makers can receive them.
 - `powerplatform_rbac_role_assignment` is preview. It is not wired up. Its `principal_id` would be the enterprise application object id, which is different from the client id used by `powerplatform_application_user`.
 - Copilot Studio Application Insights integration is preview. It is not used.
 - Agent 365 is out of scope.
@@ -326,6 +353,7 @@ Checked against provider **4.2.1**. Where the provider has no resource, this rep
 - Do not set `environment_group_id` to the empty guid. Provider 4.2.1 treated that as group membership, after which managed-environment settings could not apply. Null omits the attribute.
 - An empty `member_object_ids` list means nobody is in the security group. If Dataverse refuses the pipeline caller, set `pipeline_security_group_object_id` to the enterprise application **object** id so it is added as a member.
 - Adoption of an existing application user is ownership. Destroy deletes that user.
+- Dataverse grants System Administrator to the identity that creates an environment. When `pipeline_application_id` is also the identity running Terraform (the usual CI setup), the application user already holds that role, and provider 4.2.1 refuses to create the assignment again ("This security role is already assigned to the principal"). With `manage_pipeline_security_role = null` (the default) the lanes stack detects that case and does not declare the assignment, so it is not in state and destroy does not remove it. Set the variable to `true` or `false` to override. With a CLI sign-in as a person, the assignment is created as before.
 - Tenant settings destroy restores the snapshot from create. Deprecated settings (`disable_survey_feedback`, `disable_nps_comments_reachout`, `disable_create_from_image`, `disable_create_from_figma`, `enable_open_ai_bot_publishing`) are left unset on purpose.
 - The default-environment data policy stays off until `manage_default_environment_dlp` is true. It is `OnlyEnvironments` on the environment whose type is `Default`.
 - `powerplatform_tenant_isolation_policy` is a real resource, and it is not in the tenant stack. Provider 4.2.1 fails `terraform validate` when `allowed_tenants` is unknown, which is what a variable or a `count` of zero produces during validate. `examples/tenant-isolation` keeps `is_disabled = true` and an empty allow list as literals. Edit those arguments and apply that root on its own when you intend to manage cross-tenant isolation. Read the plan first. The GitHub workflows do not apply it.

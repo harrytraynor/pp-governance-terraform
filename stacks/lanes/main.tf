@@ -12,6 +12,8 @@ provider "azuread" {
   use_cli   = var.use_cli
 }
 
+data "azuread_client_config" "caller" {}
+
 locals {
   tier_files = fileset("${path.root}/../../tiers", "*.yaml")
   lane_files = fileset("${path.root}/../../lanes", "*.yaml")
@@ -70,6 +72,14 @@ locals {
     length(data.terraform_remote_state.groups) == 1 ? data.terraform_remote_state.groups[0].outputs.environment_group_ids : {}
   )
 
+  # Optional lane keys. A lane without them keeps the original Sandbox dev environment.
+  dev_environment_types = {
+    for name, lane in local.lanes : name => coalesce(try(lane.dev_environment_type, null), "Sandbox")
+  }
+  dev_environment_owner_ids = {
+    for name, lane in local.lanes : name => try(lane.dev_environment_owner_object_id, null)
+  }
+
   grouped_lanes = {
     for name, lane in local.lanes : name => lane
     if !lane.outside_group
@@ -87,6 +97,13 @@ locals {
     if var.create_release_stages && local.tier_by_name[lane.tier].dedicated_prod
   }
 
+  # The environment creator already holds System Administrator. Declaring the
+  # same grant again fails with "already assigned".
+  manage_pipeline_role = var.manage_pipeline_security_role != null ? var.manage_pipeline_security_role : !(
+    lower(var.pipeline_application_id) == lower(data.azuread_client_config.caller.client_id) &&
+    var.security_role_name == "System Administrator"
+  )
+
   extra_members = var.pipeline_security_group_object_id != null && var.pipeline_security_group_object_id != "" ? [var.pipeline_security_group_object_id] : []
 }
 
@@ -101,6 +118,14 @@ resource "terraform_data" "lane_rules" {
     precondition {
       condition     = each.value.tier != "exception" || try(each.value.exception_expires_on, null) != null
       error_message = "Lane ${each.key} uses the exception tier and must set exception_expires_on (YYYY-MM-DD)."
+    }
+    precondition {
+      condition     = contains(["Sandbox", "Developer"], local.dev_environment_types[each.key])
+      error_message = "Lane ${each.key} sets dev_environment_type to ${local.dev_environment_types[each.key]}. Use Sandbox or Developer."
+    }
+    precondition {
+      condition     = local.dev_environment_types[each.key] != "Developer" || local.dev_environment_owner_ids[each.key] != null
+      error_message = "Lane ${each.key} uses a Developer dev environment and must set dev_environment_owner_object_id to an Entra user object id."
     }
     precondition {
       condition     = !each.value.outside_group || local.tier_by_name[each.value.tier].ungrouped_managed_environment_json != ""
@@ -123,7 +148,8 @@ module "dev" {
 
   name                            = "${var.name_prefix}-${each.key}-dev"
   description                     = "${var.name_prefix}-${each.key}-dev. Cost centre ${each.value.cost_centre}. Owner ${each.value.owner}. Tier ${each.value.tier}. Dev mode ${each.value.dev_mode}. Governed by Terraform."
-  environment_type                = "Sandbox"
+  environment_type                = local.dev_environment_types[each.key]
+  owner_id                        = local.dev_environment_owner_ids[each.key]
   cadence                         = "Frequent"
   location                        = var.location == null || var.location == "" ? null : var.location
   macro_region                    = var.macro_region == null || var.macro_region == "" ? null : var.macro_region
@@ -134,6 +160,7 @@ module "dev" {
   tier                            = each.value.tier
   pipeline_application_id         = var.pipeline_application_id
   security_role_name              = var.security_role_name
+  manage_security_role_assignment = local.manage_pipeline_role
   member_object_ids               = distinct(concat(each.value.member_object_ids, local.extra_members))
   owner_object_ids                = var.security_group_owner_object_ids
   environment_group_id            = each.value.outside_group ? null : try(local.group_ids[each.value.tier], null)
@@ -147,88 +174,92 @@ module "shared_test" {
   source   = "../../modules/lane"
   for_each = local.shared_tiers
 
-  name                    = "${var.name_prefix}-shared-${each.key}-test"
-  description             = "Shared test for tier ${each.key}. Fan-in target. Governed by Terraform."
-  environment_type        = "Sandbox"
-  cadence                 = "Moderate"
-  location                = var.location == null || var.location == "" ? null : var.location
-  macro_region            = var.macro_region == null || var.macro_region == "" ? null : var.macro_region
-  language_code           = var.language_code
-  currency_code           = var.currency_code
-  cost_centre             = "shared"
-  owner                   = "platform"
-  tier                    = each.key
-  pipeline_application_id = var.pipeline_application_id
-  security_role_name      = var.security_role_name
-  member_object_ids       = local.extra_members
-  owner_object_ids        = var.security_group_owner_object_ids
-  environment_group_id    = local.group_ids[each.key]
+  name                            = "${var.name_prefix}-shared-${each.key}-test"
+  description                     = "Shared test for tier ${each.key}. Fan-in target. Governed by Terraform."
+  environment_type                = "Sandbox"
+  cadence                         = "Moderate"
+  location                        = var.location == null || var.location == "" ? null : var.location
+  macro_region                    = var.macro_region == null || var.macro_region == "" ? null : var.macro_region
+  language_code                   = var.language_code
+  currency_code                   = var.currency_code
+  cost_centre                     = "shared"
+  owner                           = "platform"
+  tier                            = each.key
+  pipeline_application_id         = var.pipeline_application_id
+  security_role_name              = var.security_role_name
+  manage_security_role_assignment = local.manage_pipeline_role
+  member_object_ids               = local.extra_members
+  owner_object_ids                = var.security_group_owner_object_ids
+  environment_group_id            = local.group_ids[each.key]
 }
 
 module "shared_prod" {
   source   = "../../modules/lane"
   for_each = local.shared_tiers
 
-  name                    = "${var.name_prefix}-shared-${each.key}-prod"
-  description             = "Shared production for tier ${each.key}. Fan-in target. Governed by Terraform."
-  environment_type        = "Production"
-  cadence                 = "Moderate"
-  location                = var.location == null || var.location == "" ? null : var.location
-  macro_region            = var.macro_region == null || var.macro_region == "" ? null : var.macro_region
-  language_code           = var.language_code
-  currency_code           = var.currency_code
-  cost_centre             = "shared"
-  owner                   = "platform"
-  tier                    = each.key
-  pipeline_application_id = var.pipeline_application_id
-  security_role_name      = var.security_role_name
-  member_object_ids       = local.extra_members
-  owner_object_ids        = var.security_group_owner_object_ids
-  environment_group_id    = local.group_ids[each.key]
+  name                            = "${var.name_prefix}-shared-${each.key}-prod"
+  description                     = "Shared production for tier ${each.key}. Fan-in target. Governed by Terraform."
+  environment_type                = "Production"
+  cadence                         = "Moderate"
+  location                        = var.location == null || var.location == "" ? null : var.location
+  macro_region                    = var.macro_region == null || var.macro_region == "" ? null : var.macro_region
+  language_code                   = var.language_code
+  currency_code                   = var.currency_code
+  cost_centre                     = "shared"
+  owner                           = "platform"
+  tier                            = each.key
+  pipeline_application_id         = var.pipeline_application_id
+  security_role_name              = var.security_role_name
+  manage_security_role_assignment = local.manage_pipeline_role
+  member_object_ids               = local.extra_members
+  owner_object_ids                = var.security_group_owner_object_ids
+  environment_group_id            = local.group_ids[each.key]
 }
 
 module "dedicated_test" {
   source   = "../../modules/lane"
   for_each = local.dedicated_lanes
 
-  name                    = "${var.name_prefix}-${each.key}-test"
-  description             = "${var.name_prefix}-${each.key}-test. Cost centre ${each.value.cost_centre}. Owner ${each.value.owner}. Tier ${each.value.tier}. Governed by Terraform."
-  environment_type        = "Sandbox"
-  cadence                 = "Moderate"
-  location                = var.location == null || var.location == "" ? null : var.location
-  macro_region            = var.macro_region == null || var.macro_region == "" ? null : var.macro_region
-  language_code           = var.language_code
-  currency_code           = var.currency_code
-  cost_centre             = each.value.cost_centre
-  owner                   = each.value.owner
-  tier                    = each.value.tier
-  pipeline_application_id = var.pipeline_application_id
-  security_role_name      = var.security_role_name
-  member_object_ids       = distinct(concat(each.value.member_object_ids, local.extra_members))
-  owner_object_ids        = var.security_group_owner_object_ids
-  environment_group_id    = local.group_ids[each.value.tier]
+  name                            = "${var.name_prefix}-${each.key}-test"
+  description                     = "${var.name_prefix}-${each.key}-test. Cost centre ${each.value.cost_centre}. Owner ${each.value.owner}. Tier ${each.value.tier}. Governed by Terraform."
+  environment_type                = "Sandbox"
+  cadence                         = "Moderate"
+  location                        = var.location == null || var.location == "" ? null : var.location
+  macro_region                    = var.macro_region == null || var.macro_region == "" ? null : var.macro_region
+  language_code                   = var.language_code
+  currency_code                   = var.currency_code
+  cost_centre                     = each.value.cost_centre
+  owner                           = each.value.owner
+  tier                            = each.value.tier
+  pipeline_application_id         = var.pipeline_application_id
+  security_role_name              = var.security_role_name
+  manage_security_role_assignment = local.manage_pipeline_role
+  member_object_ids               = distinct(concat(each.value.member_object_ids, local.extra_members))
+  owner_object_ids                = var.security_group_owner_object_ids
+  environment_group_id            = local.group_ids[each.value.tier]
 }
 
 module "dedicated_prod" {
   source   = "../../modules/lane"
   for_each = local.dedicated_lanes
 
-  name                    = "${var.name_prefix}-${each.key}-prod"
-  description             = "${var.name_prefix}-${each.key}-prod. Cost centre ${each.value.cost_centre}. Owner ${each.value.owner}. Tier ${each.value.tier}. Governed by Terraform."
-  environment_type        = "Production"
-  cadence                 = "Moderate"
-  location                = var.location == null || var.location == "" ? null : var.location
-  macro_region            = var.macro_region == null || var.macro_region == "" ? null : var.macro_region
-  language_code           = var.language_code
-  currency_code           = var.currency_code
-  cost_centre             = each.value.cost_centre
-  owner                   = each.value.owner
-  tier                    = each.value.tier
-  pipeline_application_id = var.pipeline_application_id
-  security_role_name      = var.security_role_name
-  member_object_ids       = distinct(concat(each.value.member_object_ids, local.extra_members))
-  owner_object_ids        = var.security_group_owner_object_ids
-  environment_group_id    = local.group_ids[each.value.tier]
+  name                            = "${var.name_prefix}-${each.key}-prod"
+  description                     = "${var.name_prefix}-${each.key}-prod. Cost centre ${each.value.cost_centre}. Owner ${each.value.owner}. Tier ${each.value.tier}. Governed by Terraform."
+  environment_type                = "Production"
+  cadence                         = "Moderate"
+  location                        = var.location == null || var.location == "" ? null : var.location
+  macro_region                    = var.macro_region == null || var.macro_region == "" ? null : var.macro_region
+  language_code                   = var.language_code
+  currency_code                   = var.currency_code
+  cost_centre                     = each.value.cost_centre
+  owner                           = each.value.owner
+  tier                            = each.value.tier
+  pipeline_application_id         = var.pipeline_application_id
+  security_role_name              = var.security_role_name
+  manage_security_role_assignment = local.manage_pipeline_role
+  member_object_ids               = distinct(concat(each.value.member_object_ids, local.extra_members))
+  owner_object_ids                = var.security_group_owner_object_ids
+  environment_group_id            = local.group_ids[each.value.tier]
 }
 
 locals {

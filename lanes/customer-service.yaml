@@ -10,3 +10,9 @@ triggers:
   access: false
   complexity: false
 member_object_ids: []
+# Optional. Sandbox (default when omitted) or Developer. The examples use Developer
+# because the dev tenant has no paid Dataverse database capacity. See the README.
+dev_environment_type: Developer
+# Entra user object id that owns the Developer environment. Required for Developer.
+# Replace this placeholder with a user object id from your own tenant before you apply.
+dev_environment_owner_object_id: 00000000-0000-0000-0000-000000000000

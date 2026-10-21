@@ -21,6 +21,6 @@
 # Security role assignment import id:
 # {environment id}/systemusers/{system user id}/{role id}
 # import {
-#   to = module.dev["customer-service"].powerplatform_security_role_assignment.pipeline
+#   to = module.dev["customer-service"].powerplatform_security_role_assignment.pipeline[0]
 #   id = "00000000-0000-0000-0000-000000000001/systemusers/00000000-0000-0000-0000-000000000002/00000000-0000-0000-0000-000000000004"
 # }

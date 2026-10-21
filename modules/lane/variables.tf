@@ -10,11 +10,22 @@ variable "description" {
 
 variable "environment_type" {
   type        = string
-  description = "Sandbox or Production. Developer is preview and is not used."
+  description = "Sandbox, Production, or Developer. Developer is preview, needs owner_id, and uses no tenant Dataverse database capacity."
 
   validation {
-    condition     = contains(["Sandbox", "Production"], var.environment_type)
-    error_message = "environment_type must be Sandbox or Production."
+    condition     = contains(["Sandbox", "Production", "Developer"], var.environment_type)
+    error_message = "environment_type must be Sandbox, Production, or Developer."
+  }
+}
+
+variable "owner_id" {
+  type        = string
+  description = "Entra user object id that owns a Developer environment. Required when environment_type is Developer, ignored otherwise."
+  default     = null
+
+  validation {
+    condition     = var.owner_id == null || can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.owner_id))
+    error_message = "owner_id must be an Entra user object id GUID."
   }
 }
 
@@ -83,6 +94,12 @@ variable "security_role_name" {
   type        = string
   description = "Dataverse security role assigned to the pipeline application user."
   default     = "System Administrator"
+}
+
+variable "manage_security_role_assignment" {
+  type        = bool
+  description = "Create the security role assignment for the pipeline application user. Set false when Dataverse has already granted that role, for example because the pipeline application created the environment."
+  default     = true
 }
 
 variable "member_object_ids" {
