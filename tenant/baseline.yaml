@@ -3,8 +3,10 @@
 disable_environment_creation_by_non_admin_users: true
 disable_trial_environment_creation_by_non_admin_users: true
 disable_portals_creation_by_non_admin_users: true
-# Forced to false when environment routing is switched on, so makers can receive
-# the personal developer environment the routing rule creates.
+# Forced to false when environment routing is switched on. Provider 4.2.1 does
+# not validate that pairing. Microsoft says the developer-environment assignment
+# setting does not affect routing. The example still clears the block so a maker
+# is not refused a developer environment if the service still requires it.
 disable_developer_environment_creation_by_non_admin_users: true
 enable_default_environment_routing: false
 disable_share_with_everyone: true

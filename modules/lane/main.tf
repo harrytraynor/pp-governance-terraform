@@ -1,7 +1,16 @@
 data "azuread_client_config" "current" {}
 
 locals {
-  mail_nickname = substr(replace(lower(var.name), "/[^a-z0-9]/", ""), 0, 64)
+  # <cost centre>-<lane>-<stage>, lowercase, hyphens, no spaces.
+  # Trim, turn spaces and underscores into hyphens, then collapse repeats.
+  # Provider 4.2.1 does not force replacement when display_name changes.
+  cost_centre_slug = trim(replace(replace(replace(lower(trimspace(var.cost_centre)), " ", "-"), "_", "-"), "/-+/", "-"), "-")
+  name_label_slug  = trim(replace(replace(replace(lower(trimspace(var.name_label)), " ", "-"), "_", "-"), "/-+/", "-"), "-")
+  display_name     = "${local.cost_centre_slug}-${local.name_label_slug}-${var.stage}"
+
+  # Stable alias for new groups. Existing groups keep the alias already in state
+  # (ignore_changes below). Changing mail_nickname would replace the Entra group.
+  mail_nickname = substr(replace(lower("${trimspace(var.name_label)}-${trimspace(var.tier)}-${var.stage}"), "/[^a-z0-9]/", ""), 0, 64)
 
   # A count of zero still has to type-check. The placeholder is never sent.
   managed = var.managed_environment != null ? var.managed_environment : {
@@ -15,12 +24,16 @@ locals {
 }
 
 resource "azuread_group" "this" {
-  display_name     = var.name
+  display_name     = local.display_name
   description      = substr(var.description, 0, 1024)
   security_enabled = true
   mail_enabled     = false
   mail_nickname    = local.mail_nickname
   owners           = distinct(concat([data.azuread_client_config.current.object_id], var.owner_object_ids))
+
+  lifecycle {
+    ignore_changes = [mail_nickname]
+  }
 }
 
 resource "azuread_group_member" "member" {
@@ -31,7 +44,7 @@ resource "azuread_group_member" "member" {
 }
 
 resource "powerplatform_environment" "this" {
-  display_name     = var.name
+  display_name     = local.display_name
   description      = var.description
   location         = var.location
   macro_region     = var.macro_region
@@ -73,16 +86,20 @@ resource "powerplatform_environment" "this" {
     ignore_changes  = [owner_id]
 
     precondition {
+      condition     = local.cost_centre_slug != "" && local.name_label_slug != ""
+      error_message = "Environment display name needs a cost centre and a lane that still contain a letter or digit after slugifying. A blank cost centre is rejected."
+    }
+    precondition {
       condition     = (var.location != null && var.macro_region == null) || (var.location == null && var.macro_region != null)
-      error_message = "Environment ${var.name} needs exactly one of location or macro_region."
+      error_message = "Environment ${local.display_name} needs exactly one of location or macro_region."
     }
     precondition {
       condition     = var.environment_type != "Developer" || var.owner_id != null
-      error_message = "Environment ${var.name} is a Developer environment and needs owner_id (an Entra user object id)."
+      error_message = "Environment ${local.display_name} is a Developer environment and needs owner_id (an Entra user object id)."
     }
     precondition {
       condition     = var.manage_with_managed_environment ? var.environment_group_id == null && var.managed_environment != null : var.environment_group_id != null
-      error_message = "Environment ${var.name} must either sit in a group or carry managed-environment settings, and never both. Group rules are the source of truth for grouped environments."
+      error_message = "Environment ${local.display_name} must either sit in a group or carry managed-environment settings, and never both. Group rules are the source of truth for grouped environments."
     }
   }
 }

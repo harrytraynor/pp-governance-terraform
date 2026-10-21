@@ -39,9 +39,33 @@ variable "manage_default_environment_dlp" {
   default     = false
 }
 
+variable "route_new_makers_to_sandbox" {
+  type        = bool
+  description = "Second tenant apply, after the groups stack. Read the sandbox environment group id from groups remote state and turn on default-environment routing for new makers. Stays off in a fresh clone. An explicit environment_routing_target_group_id is used instead of the remote state read when it is set."
+  default     = false
+}
+
 variable "environment_routing_target_group_id" {
   type        = string
-  description = "Sandbox (or other) environment group id. When set, default-environment routing is switched on and new makers are sent there. Apply the groups stack first."
+  description = "Sandbox environment group id. When set, default-environment routing is switched on and this id is used. Leave null to keep routing off, or set route_new_makers_to_sandbox and the backend variables to read the id from groups state. Apply the groups stack first."
+  default     = null
+}
+
+variable "backend_resource_group_name" {
+  type        = string
+  description = "Resource group of the Terraform state storage account. Used only when route_new_makers_to_sandbox reads groups state."
+  default     = null
+}
+
+variable "backend_storage_account_name" {
+  type        = string
+  description = "Storage account of the Terraform state. Used only when route_new_makers_to_sandbox reads groups state."
+  default     = null
+}
+
+variable "backend_container_name" {
+  type        = string
+  description = "Blob container of the Terraform state. Used only when route_new_makers_to_sandbox reads groups state."
   default     = null
 }
 

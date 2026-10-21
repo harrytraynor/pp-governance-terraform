@@ -16,7 +16,7 @@ Read [Security and limitations](#security-and-limitations) before you adapt this
 | Path | What it holds |
 | --- | --- |
 | `tiers/` | One YAML file per size: sandbox, small, medium, large, exception. Rules, release shape, and the data-policy connector list. |
-| `lanes/` | One YAML file per lane (an environment request). Two examples are included. |
+| `lanes/` | One YAML file per lane (an environment request). Files can sit in subfolders. Two examples are included. |
 | `tenant/baseline.yaml` | Tenant settings this stack will send. Omitted settings stay as they are. |
 | `modules/tier-config` | Reads one tier file and emits stable outputs. |
 | `modules/environment-group` | One environment group and its rule set. |
@@ -33,7 +33,7 @@ Read [Security and limitations](#security-and-limitations) before you adapt this
 
 Apply order is **tenant**, then **groups**, then **lanes**. A bad lane plan cannot refresh the tenant stack, because the state files are separate.
 
-With `create_release_stages = false` (the default), the two example lanes produce two dev environments: `ppgov-customer-service-dev` (medium) and `ppgov-field-operations-dev` (large). The example lanes set `dev_environment_type: Developer`; see [Developer dev environments](#developer-dev-environments). Turning the flag on also creates the shared medium test and production environments, and the dedicated field-operations test and production environments. Read that plan before you apply it.
+With `create_release_stages = false` (the default), the two example lanes produce two dev environments: `cc-0000-customer-service-dev` and `cc-0000-field-operations-dev`. The display name is `<cost centre>-<lane>-<stage>`, built in `modules/lane`. The cost centre and the lane are trimmed, lowercased, and slugified: spaces and underscores become hyphens, and repeated hyphens collapse. A blank cost centre is rejected. Names have to stay unique for each lane and stage, and validation fails when two would slugify to the same name. A shared fan-in environment uses the label `all-lanes`, for example `shared-all-lanes-test`. `name_prefix` is only used on data policy names. Provider 4.2.1 updates `display_name` in place. The Entra group's mail nickname is left as it was, because changing it would replace the group. The example lanes set `dev_environment_type: Developer`; see [Developer dev environments](#developer-dev-environments). Turning the flag on also creates `shared-all-lanes-test`, `shared-all-lanes-prod`, `cc-0000-field-operations-test`, and `cc-0000-field-operations-prod`. Read that plan before you apply it.
 
 ## Prerequisites
 
@@ -156,7 +156,7 @@ terraform init -input=false -backend-config=backend.hcl
 terraform plan
 ```
 
-Leave `manage_default_environment_dlp` false for this plan. Routing stays off until `environment_routing_target_group_id` is set, and that id does not exist until the groups stack has been applied. Cross-tenant isolation is a separate example, described under known limitations, and this plan does not touch it.
+Leave `manage_default_environment_dlp` false for this plan. Leave `route_new_makers_to_sandbox` false as well. Routing stays off until a second tenant apply, after the groups stack exists. See [Steering makers away from the default environment](#steering-makers-away-from-the-default-environment). Cross-tenant isolation is a separate example, described under known limitations, and this plan does not touch it.
 
 Read the plan. It changes tenant settings listed in `tenant/baseline.yaml`. Destroy later restores the values Terraform recorded at create. It does not delete the tenant.
 
@@ -266,17 +266,20 @@ Repository **variables**, not secrets. The workflows never read a client secret.
 | `POWER_PLATFORM_CURRENCY` | no | Defaults to `GBP`. The currency must be enabled in the tenant. |
 | `CREATE_RELEASE_STAGES` | no | `true` or `false`. Defaults to false. |
 | `MANAGE_DEFAULT_ENVIRONMENT_DLP` | no | `true` creates the default-environment data policy. Defaults to false. |
-| `ENVIRONMENT_ROUTING_TARGET_GROUP_ID` | no | Sandbox group id. When set, default-environment routing is turned on. |
+| `ENVIRONMENT_ROUTING_TARGET_GROUP_ID` | no | Explicit sandbox group id. When set, default-environment routing is turned on and this id is used. |
+| `ROUTE_NEW_MAKERS_TO_SANDBOX` | no | `true` or `false`. Defaults to false. When true, and the explicit group id is empty, the tenant stack reads the sandbox group id from groups state. |
 
 Language is 1033 in the example tfvars. Change `language_code` there for a local apply. The workflows pass currency and location. They leave language at the variable default.
 
 ## Add a lane
 
-1. Copy `lanes/customer-service.yaml` to a new file. Keep every key, including nulls and empty lists. Lane names must be unique.
+1. Copy `lanes/customer-service.yaml` to a new file. A subfolder is fine, for example `lanes/finance/payroll.yaml`. Keep every key, including nulls and empty lists. The `lane` value is the Terraform key, not the path, and it must be unique across every file under `lanes/`.
 2. Set `tier` to `sandbox`, `small`, `medium`, `large`, or `exception`.
 3. An `exception` lane must set `exception_expires_on` to a future `YYYY-MM-DD`. Any other tier must leave it null.
 4. Put Entra object ids in `member_object_ids` for the people who should use the environment.
 5. Open a pull request. `scripts/check-lanes.py` runs in CI, and the plan comment shows the new dev environment.
+
+`lanes/operations/field-operations.yaml` shows a lane in a folder. Its key is still `field-operations`. `lanes/customer-service.yaml` stays at the top of `lanes/`. Moving a file does not replace the environment.
 
 Two optional keys choose the dev environment type:
 
@@ -304,6 +307,31 @@ What Developer changes:
 - The example lanes set `dev_environment_owner_object_id` to `00000000-0000-0000-0000-000000000000`. Replace that placeholder with a user object id from your own tenant before the first apply. After the environment exists, Terraform ignores `owner_id`, so a later edit or this public placeholder does not replace it. Transfer ownership in the Power Platform admin centre instead.
 
 To switch back to Sandbox once the tenant has capacity, delete `dev_environment_type` and `dev_environment_owner_object_id` from the lane file (or set `dev_environment_type: Sandbox` and remove the owner). The environment type forces replacement, and `prevent_destroy` stops that plan. Remove the `lifecycle` block in `modules/lane/main.tf`, read the plan that replaces the dev environment, apply it, and then restore the block. Anything built in the old dev environment is lost unless it is in a solution.
+
+## Steering makers away from the default environment
+
+Default-environment routing sends a maker who opens Copilot Studio, Power Apps, or Power Automate into a personal developer environment instead of the shared default environment. This example aims those new environments at the Sandbox environment group. The Sandbox group rules then apply immediately. The environments are managed. They are not Terraform resources.
+
+Routing stays off in a fresh clone. The tenant stack is applied before the groups stack, so the Sandbox group does not exist on the first tenant apply. Turn routing on with a second tenant apply, after groups has been applied.
+
+Two ways to name the group. Neither puts a real id in git.
+
+- Set `route_new_makers_to_sandbox = true` in `stacks/tenant/terraform.tfvars`, and set `backend_resource_group_name`, `backend_storage_account_name`, and `backend_container_name` to the same values as `backend.hcl`. The stack reads `environment_group_ids["sandbox"]` from `groups.tfstate`. In GitHub, set the repository variable `ROUTE_NEW_MAKERS_TO_SANDBOX` to `true`. The workflows already pass the state account variables. Leave this false until groups exists.
+- Or set `environment_routing_target_group_id` to the sandbox group id printed by `terraform -chdir=stacks/groups output environment_group_ids`. In GitHub that value is `ENVIRONMENT_ROUTING_TARGET_GROUP_ID`. An explicit id is used instead of the remote state read.
+
+`environment_routing_all_makers` stays false, so only new makers are routed. Set it to true to include makers who already build. Leave `environment_routing_target_security_group_id` unset to keep the tenant's current audience. Provider 4.2.1 treats `00000000-0000-0000-0000-000000000000` as every user.
+
+What a maker sees: the next visit to Copilot Studio, Power Apps, or Power Automate lands in a developer environment they already own, or in a new one created in the Sandbox group. They are an admin of a new environment. If creation fails, they land in the default environment. They can still open other environments afterwards.
+
+The Sandbox data policy is block-by-default. It allows Dataverse, Approvals, Office 365 Users, and SharePoint, and it blocks custom connectors. Sharing in the group is limited to five people and excludes security groups. Solution checker is set to block. Bing search and moving data across regions stay off, so a Copilot that needs those features will not work until you change `tiers/sandbox.yaml`. Provider 4.2.1 attaches a data policy to a list of environment ids, not to the group. The lanes stack adds every environment currently in the Sandbox group on its next apply. Until that apply, a newly routed environment inherits tenant-level data policies only. Group rules apply at once, because they live on the group.
+
+Limits to plan for:
+
+- Each person can own only so many developer environments, and they need a licence that allows one. Creating or previewing in the managed environment does not need a premium licence. Running an app or flow there does. These environments do not draw on tenant Dataverse capacity.
+- Routed environments are outside this state. Destroy does not delete them.
+- Only new makers are routed unless `environment_routing_all_makers` is true.
+- While routing is on, this example sets `disable_developer_environment_creation_by_non_admin_users` to false. Provider 4.2.1 lists the routing attributes and does not validate that pairing. Current Microsoft documentation says the developer-environment assignment setting does not affect routing. The example still clears the block.
+- Provider 4.2.1 has one target group, one audience, and the new-makers flag. It cannot express the admin centre's newer multi-rule routing, and it cannot limit routing to Copilot Studio alone.
 
 ## Tear down
 
@@ -349,7 +377,7 @@ Checked against provider **4.2.1**. Where the provider has no resource, this rep
 - A setting with no group rule stays at environment level. This repository does not push those settings onto a grouped environment.
 - There is no resource for Power Platform Pipelines.
 - There is no resource for prepaid Copilot credit allocation. `powerplatform_billing_policy` is pay-as-you-go Azure billing. It is not wired up.
-- Environment type `Developer` is preview and needs an `owner_id`. The example lanes use it for dev only (see above). If you later turn on default-environment routing, the personal developer environments that routing creates are outside this state. Routing forces `disable_developer_environment_creation_by_non_admin_users` to false so makers can receive them.
+- Environment type `Developer` is preview and needs an `owner_id`. The example lanes use it for dev only (see above). Personal developer environments created by routing are a separate path, described under [Steering makers away from the default environment](#steering-makers-away-from-the-default-environment).
 - `powerplatform_rbac_role_assignment` is preview. It is not wired up. Its `principal_id` would be the enterprise application object id, which is different from the client id used by `powerplatform_application_user`.
 - Copilot Studio Application Insights integration is preview. It is not used.
 - Agent 365 is out of scope.

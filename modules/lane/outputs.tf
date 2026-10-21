@@ -1,3 +1,8 @@
+output "display_name" {
+  description = "Environment and security group display name: slugified cost centre, lane, then stage."
+  value       = local.display_name
+}
+
 output "environment_id" {
   description = "Environment id."
   value       = powerplatform_environment.this.id

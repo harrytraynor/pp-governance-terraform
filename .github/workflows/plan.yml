@@ -95,6 +95,7 @@ jobs:
       TF_VAR_backend_storage_account_name: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
       TF_VAR_backend_container_name: ${{ vars.TF_STATE_CONTAINER }}
       TF_VAR_environment_routing_target_group_id: ${{ vars.ENVIRONMENT_ROUTING_TARGET_GROUP_ID }}
+      TF_VAR_route_new_makers_to_sandbox: ${{ vars.ROUTE_NEW_MAKERS_TO_SANDBOX || 'false' }}
       POWER_PLATFORM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       POWER_PLATFORM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       POWER_PLATFORM_USE_OIDC: "true"

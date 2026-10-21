@@ -16,7 +16,10 @@ data "azuread_client_config" "caller" {}
 
 locals {
   tier_files = fileset("${path.root}/../../tiers", "*.yaml")
-  lane_files = fileset("${path.root}/../../lanes", "*.yaml")
+  # ** includes lanes/customer-service.yaml and lanes/operations/field-operations.yaml.
+  # The for_each key is the lane field, not the path, so moving a file does not
+  # replace the environment. Two files with the same lane field fail here.
+  lane_files = fileset("${path.root}/../../lanes", "**/*.yaml")
 
   lanes = {
     for filename in local.lane_files :
@@ -106,6 +109,20 @@ locals {
   )
 
   extra_members = var.pipeline_security_group_object_id != null && var.pipeline_security_group_object_id != "" ? [var.pipeline_security_group_object_id] : []
+
+  # Names come from modules/lane. The tier is not part of the name, so two
+  # fan-in tiers, or two lanes that slugify the same way, would collide.
+  created_display_names = concat(
+    [for _, env in module.dev : env.display_name],
+    [for _, env in module.shared_test : env.display_name],
+    [for _, env in module.shared_prod : env.display_name],
+    [for _, env in module.dedicated_test : env.display_name],
+    [for _, env in module.dedicated_prod : env.display_name],
+  )
+  duplicate_display_names = [
+    for name in toset(local.created_display_names) : name
+    if length([for candidate in local.created_display_names : candidate if candidate == name]) > 1
+  ]
 }
 
 resource "terraform_data" "lane_rules" {
@@ -143,12 +160,22 @@ resource "terraform_data" "lane_rules" {
   }
 }
 
+resource "terraform_data" "display_names" {
+  lifecycle {
+    precondition {
+      condition     = length(local.duplicate_display_names) == 0
+      error_message = "Environment display names must stay unique per lane and stage. These collide: ${join(", ", local.duplicate_display_names)}. The name is <cost centre>-<lane>-<stage> and no longer includes the tier."
+    }
+  }
+}
+
 module "dev" {
   source   = "../../modules/lane"
   for_each = local.lanes
 
-  name                            = "${var.name_prefix}-${each.key}-dev"
-  description                     = "${var.name_prefix}-${each.key}-dev. Cost centre ${each.value.cost_centre}. Owner ${each.value.owner}. Tier ${each.value.tier}. Dev mode ${each.value.dev_mode}. Governed by Terraform."
+  name_label                      = each.key
+  stage                           = "dev"
+  description                     = "Cost centre ${each.value.cost_centre}. Owner ${each.value.owner}. Tier ${each.value.tier}. Dev mode ${each.value.dev_mode}. Governed by Terraform."
   environment_type                = local.dev_environment_types[each.key]
   owner_id                        = local.dev_environment_owner_ids[each.key]
   cadence                         = "Frequent"
@@ -175,7 +202,8 @@ module "shared_test" {
   source   = "../../modules/lane"
   for_each = local.shared_tiers
 
-  name                            = "${var.name_prefix}-shared-${each.key}-test"
+  name_label                      = "all-lanes"
+  stage                           = "test"
   description                     = "Shared test for tier ${each.key}. Fan-in target. Governed by Terraform."
   environment_type                = "Sandbox"
   cadence                         = "Moderate"
@@ -198,7 +226,8 @@ module "shared_prod" {
   source   = "../../modules/lane"
   for_each = local.shared_tiers
 
-  name                            = "${var.name_prefix}-shared-${each.key}-prod"
+  name_label                      = "all-lanes"
+  stage                           = "prod"
   description                     = "Shared production for tier ${each.key}. Fan-in target. Governed by Terraform."
   environment_type                = "Production"
   cadence                         = "Moderate"
@@ -221,8 +250,9 @@ module "dedicated_test" {
   source   = "../../modules/lane"
   for_each = local.dedicated_lanes
 
-  name                            = "${var.name_prefix}-${each.key}-test"
-  description                     = "${var.name_prefix}-${each.key}-test. Cost centre ${each.value.cost_centre}. Owner ${each.value.owner}. Tier ${each.value.tier}. Governed by Terraform."
+  name_label                      = each.key
+  stage                           = "test"
+  description                     = "Cost centre ${each.value.cost_centre}. Owner ${each.value.owner}. Tier ${each.value.tier}. Governed by Terraform."
   environment_type                = "Sandbox"
   cadence                         = "Moderate"
   location                        = var.location == null || var.location == "" ? null : var.location
@@ -244,8 +274,9 @@ module "dedicated_prod" {
   source   = "../../modules/lane"
   for_each = local.dedicated_lanes
 
-  name                            = "${var.name_prefix}-${each.key}-prod"
-  description                     = "${var.name_prefix}-${each.key}-prod. Cost centre ${each.value.cost_centre}. Owner ${each.value.owner}. Tier ${each.value.tier}. Governed by Terraform."
+  name_label                      = each.key
+  stage                           = "prod"
+  description                     = "Cost centre ${each.value.cost_centre}. Owner ${each.value.owner}. Tier ${each.value.tier}. Governed by Terraform."
   environment_type                = "Production"
   cadence                         = "Moderate"
   location                        = var.location == null || var.location == "" ? null : var.location
@@ -263,21 +294,42 @@ module "dedicated_prod" {
   environment_group_id            = local.group_ids[each.value.tier]
 }
 
+# Personal developer environments created by routing are not resources in this
+# state. The next lanes apply adds every environment currently in the Sandbox
+# group to that tier's data policy. Provider 4.2.1 scopes a policy to environment
+# ids, not to a group, so a brand-new routed environment waits for this apply.
+data "powerplatform_environments" "catalogue" {
+  count = try(local.group_ids["sandbox"], "") != "" ? 1 : 0
+}
+
 locals {
+  sandbox_group_environment_ids = length(data.powerplatform_environments.catalogue) == 0 ? [] : [
+    for env in data.powerplatform_environments.catalogue[0].environments : env.id
+    if env.environment_group_id == local.group_ids["sandbox"]
+  ]
+
+  dlp_tiers = setunion(
+    local.lane_tiers,
+    length(local.sandbox_group_environment_ids) > 0 ? toset(["sandbox"]) : toset([]),
+  )
+
   environment_ids_by_tier = {
-    for tier_name in local.lane_tiers : tier_name => concat(
-      [for name, env in module.dev : env.environment_id if local.lanes[name].tier == tier_name],
-      [for name, env in module.shared_test : env.environment_id if name == tier_name],
-      [for name, env in module.shared_prod : env.environment_id if name == tier_name],
-      [for name, env in module.dedicated_test : env.environment_id if local.lanes[name].tier == tier_name],
-      [for name, env in module.dedicated_prod : env.environment_id if local.lanes[name].tier == tier_name],
-    )
+    for tier_name in local.dlp_tiers : tier_name => distinct(concat(
+      contains(local.lane_tiers, tier_name) ? concat(
+        [for name, env in module.dev : env.environment_id if local.lanes[name].tier == tier_name],
+        [for name, env in module.shared_test : env.environment_id if name == tier_name],
+        [for name, env in module.shared_prod : env.environment_id if name == tier_name],
+        [for name, env in module.dedicated_test : env.environment_id if local.lanes[name].tier == tier_name],
+        [for name, env in module.dedicated_prod : env.environment_id if local.lanes[name].tier == tier_name],
+      ) : [],
+      tier_name == "sandbox" ? local.sandbox_group_environment_ids : [],
+    ))
   }
 }
 
 module "dlp" {
   source   = "../../modules/data-policy"
-  for_each = local.lane_tiers
+  for_each = local.dlp_tiers
 
   create                       = length(local.environment_ids_by_tier[each.key]) > 0
   display_name                 = "${var.name_prefix}-tier-${each.key}"
