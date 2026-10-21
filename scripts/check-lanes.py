@@ -46,14 +46,37 @@ DEV_ENVIRONMENT_TYPES = {"Sandbox", "Developer"}
 GUID_RE = re.compile(GUID)
 
 
-def load_yaml_dir(directory: Path) -> list[tuple[str, dict]]:
+def load_yaml_dir(directory: Path, recursive: bool = False) -> list[tuple[str, dict]]:
     docs = []
-    for path in sorted(directory.glob("*.yaml")):
+    if not directory.is_dir():
+        return docs
+    paths = directory.rglob("*.yaml") if recursive else directory.glob("*.yaml")
+    for path in sorted(paths):
+        relative = path.relative_to(directory).as_posix()
+        if any(part.startswith(".") for part in path.relative_to(directory).parts):
+            continue
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
-            raise SystemExit(f"{path}: expected a YAML mapping")
-        docs.append((path.name, data))
+            raise SystemExit(f"{directory.name}/{relative}: expected a YAML mapping")
+        docs.append((relative, data))
     return docs
+
+
+def duplicate_lane_errors(docs: list[tuple[str, dict]]) -> list[str]:
+    seen: dict[str, str] = {}
+    errors: list[str] = []
+    for filename, lane in docs:
+        lane_name = lane.get("lane") if isinstance(lane, dict) else None
+        if not isinstance(lane_name, str) or not lane_name:
+            continue
+        if lane_name in seen:
+            errors.append(
+                f"lanes/{filename}: duplicate lane name {lane_name} "
+                f"(also lanes/{seen[lane_name]}). The Terraform key is the lane field, not the folder."
+            )
+        else:
+            seen[lane_name] = filename
+    return errors
 
 
 def check_tier(name: str, tier: dict) -> tuple[list[str], list[str]]:
@@ -226,17 +249,13 @@ def check_repository(root: Path, today: dt.date | None = None) -> tuple[list[str
                 errors.append(f"tiers/{filename}: duplicate tier name {tier_name}")
             tiers[tier_name] = tier
 
-    seen: set[str] = set()
-    for filename, lane in load_yaml_dir(root / "lanes"):
+    lane_docs = load_yaml_dir(root / "lanes", recursive=True)
+    for filename, lane in lane_docs:
         found, notes = check_lane(filename, lane, tiers, today)
         errors.extend(found)
         warnings.extend(notes)
-        lane_name = lane.get("lane")
-        if isinstance(lane_name, str):
-            if lane_name in seen:
-                errors.append(f"lanes/{filename}: duplicate lane name {lane_name}")
-            seen.add(lane_name)
-    if not seen:
+    errors.extend(duplicate_lane_errors(lane_docs))
+    if not lane_docs:
         errors.append("lanes/: add at least one lane file")
     return errors, warnings
 
@@ -310,6 +329,17 @@ def self_test() -> None:
     errors, _ = check_lane("developer.yaml", developer, {"small": small_tier}, today)
     if errors:
         raise SystemExit(f"self-test failed: a valid Developer lane was rejected: {errors}")
+    duplicates = duplicate_lane_errors([
+        ("customer-service.yaml", {"lane": "customer-service"}),
+        ("finance/customer-service.yaml", {"lane": "customer-service"}),
+    ])
+    if len(duplicates) != 1 or "finance/customer-service.yaml" not in duplicates[0]:
+        raise SystemExit(f"self-test failed: nested duplicate lane names were not reported: {duplicates}")
+    if duplicate_lane_errors([
+        ("customer-service.yaml", {"lane": "customer-service"}),
+        ("operations/field-operations.yaml", {"lane": "field-operations"}),
+    ]):
+        raise SystemExit("self-test failed: distinct lane names in different folders were rejected")
     print("self-test passed")
 
 

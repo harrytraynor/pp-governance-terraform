@@ -16,7 +16,7 @@ Read [Security and limitations](#security-and-limitations) before you adapt this
 | Path | What it holds |
 | --- | --- |
 | `tiers/` | One YAML file per size: sandbox, small, medium, large, exception. Rules, release shape, and the data-policy connector list. |
-| `lanes/` | One YAML file per lane (an environment request). Two examples are included. |
+| `lanes/` | One YAML file per lane (an environment request). Files can sit in subfolders. Two examples are included. |
 | `tenant/baseline.yaml` | Tenant settings this stack will send. Omitted settings stay as they are. |
 | `modules/tier-config` | Reads one tier file and emits stable outputs. |
 | `modules/environment-group` | One environment group and its rule set. |
@@ -273,11 +273,13 @@ Language is 1033 in the example tfvars. Change `language_code` there for a local
 
 ## Add a lane
 
-1. Copy `lanes/customer-service.yaml` to a new file. Keep every key, including nulls and empty lists. Lane names must be unique.
+1. Copy `lanes/customer-service.yaml` to a new file. A subfolder is fine, for example `lanes/finance/payroll.yaml`. Keep every key, including nulls and empty lists. The `lane` value is the Terraform key, not the path, and it must be unique across every file under `lanes/`.
 2. Set `tier` to `sandbox`, `small`, `medium`, `large`, or `exception`.
 3. An `exception` lane must set `exception_expires_on` to a future `YYYY-MM-DD`. Any other tier must leave it null.
 4. Put Entra object ids in `member_object_ids` for the people who should use the environment.
 5. Open a pull request. `scripts/check-lanes.py` runs in CI, and the plan comment shows the new dev environment.
+
+`lanes/operations/field-operations.yaml` shows a lane in a folder. Its key is still `field-operations`. `lanes/customer-service.yaml` stays at the top of `lanes/`. Moving a file does not replace the environment.
 
 Two optional keys choose the dev environment type:
 

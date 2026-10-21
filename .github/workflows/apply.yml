@@ -8,6 +8,7 @@ on:
       - "modules/**"
       - "stacks/**"
       - "tiers/**"
+      # Matches lane files in subfolders, for example lanes/operations/field-operations.yaml.
       - "lanes/**"
       - "tenant/**"
       - "examples/register-admin-application/**"

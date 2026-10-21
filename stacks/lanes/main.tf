@@ -16,7 +16,10 @@ data "azuread_client_config" "caller" {}
 
 locals {
   tier_files = fileset("${path.root}/../../tiers", "*.yaml")
-  lane_files = fileset("${path.root}/../../lanes", "*.yaml")
+  # ** includes lanes/customer-service.yaml and lanes/operations/field-operations.yaml.
+  # The for_each key is the lane field, not the path, so moving a file does not
+  # replace the environment. Two files with the same lane field fail here.
+  lane_files = fileset("${path.root}/../../lanes", "**/*.yaml")
 
   lanes = {
     for filename in local.lane_files :

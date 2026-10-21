@@ -10,7 +10,7 @@
 # email, so add the person here or ask them for a review on the pull request.
 #
 # /lanes/customer-service.yaml    @platform-team @service-apps-owner
-# /lanes/field-operations.yaml    @platform-team @security-team @field-ops-owner
+# /lanes/operations/field-operations.yaml    @platform-team @security-team @field-ops-owner
 # /tiers/                         @platform-team @security-team
 # /tenant/                        @platform-team @security-team
 # /stacks/tenant/                 @platform-team @security-team
