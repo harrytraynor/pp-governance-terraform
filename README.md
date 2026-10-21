@@ -181,6 +181,7 @@ cp terraform.tfvars.example terraform.tfvars
 Edit `terraform.tfvars`:
 
 - Set `pipeline_application_id` to the application (client) id that should become a Dataverse application user. The example value is a placeholder. Replace it before apply. It can be the same app that runs Terraform.
+- In each lane file, replace `dev_environment_owner_object_id` (`00000000-0000-0000-0000-000000000000`) with an Entra user object id from your tenant. A Developer environment needs that owner.
 - Set `location` to a geography your tenant accepts (the example uses `europe`), or set `location = null` and set `macro_region` (for example `eu-efta`). Set exactly one.
 - Local groups state: paste the groups output into `group_ids`.
 - Remote groups state: set `backend_resource_group_name`, `backend_storage_account_name`, and `backend_container_name`, and leave `group_ids` unset. Init this stack with the same storage account so it can read `groups.tfstate`.
