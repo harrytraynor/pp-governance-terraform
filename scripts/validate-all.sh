@@ -8,6 +8,8 @@ if ! python3 -c "import yaml" >/dev/null 2>&1; then
   python3 -m pip install --user pyyaml
 fi
 
+python3 "${root}/scripts/lane_states.py" --self-test
+bash "${root}/scripts/split-lanes-state.sh" --self-test
 python3 "${root}/scripts/check-lanes.py" --self-test
 python3 "${root}/scripts/check-lanes.py" --root "${root}"
 bash "${root}/scripts/check-github-config.sh" --self-test

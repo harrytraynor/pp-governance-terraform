@@ -22,6 +22,12 @@ concurrency:
   group: apply-main
   cancel-in-progress: false
 
+# One approval for the whole deployment. The approve job is the only job
+# that sets environment: production, so GitHub asks for reviewers once.
+# Apply jobs do not set environment. Their OIDC subject is
+# repo:ORG/REPO:ref:refs/heads/main, which is the federated credential
+# gh-main-immutable. They still wait for approve, so they start only after
+# that environment has been approved. The approve job does not request a token.
 jobs:
   config:
     name: Azure configuration
@@ -47,12 +53,57 @@ jobs:
           power_platform_location: ${{ vars.POWER_PLATFORM_LOCATION }}
           power_platform_macro_region: ${{ vars.POWER_PLATFORM_MACRO_REGION }}
 
-  tenant:
-    name: Apply tenant
+  lanes-scope:
+    name: Choose lanes states
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      run: ${{ steps.matrix.outputs.run }}
+      shared: ${{ steps.matrix.outputs.shared }}
+      cost_centres: ${{ steps.matrix.outputs.cost_centres }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install PyYAML
+        run: python3 -m pip install pyyaml
+
+      - name: Build the matrix
+        id: matrix
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            ./scripts/write-lanes-matrix.sh all
+          else
+            ./scripts/write-lanes-matrix.sh diff "${BEFORE}" "${GITHUB_SHA}"
+          fi
+
+  approve:
+    name: Approve deployment
     needs: config
     if: needs.config.outputs.ready == 'true'
     runs-on: ubuntu-latest
     environment: production
+    permissions:
+      contents: read
+    steps:
+      - name: Record the approval
+        run: echo "Approved. Tenant, groups, and lanes then apply with the main-branch federated credential."
+
+  tenant:
+    name: Apply tenant
+    needs:
+      - config
+      - approve
+    if: needs.config.outputs.ready == 'true' && needs.approve.result == 'success'
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
@@ -94,10 +145,10 @@ jobs:
     name: Apply groups
     needs:
       - config
+      - approve
       - tenant
-    if: needs.config.outputs.ready == 'true' && needs.tenant.result == 'success'
+    if: needs.config.outputs.ready == 'true' && needs.approve.result == 'success' && needs.tenant.result == 'success'
     runs-on: ubuntu-latest
-    environment: production
     permissions:
       contents: read
       id-token: write
@@ -129,13 +180,78 @@ jobs:
           tf_state_container: ${{ vars.TF_STATE_CONTAINER }}
 
   lanes:
-    name: Apply lanes
+    name: Apply lanes ${{ matrix.cost_centre }}
     needs:
       - config
+      - approve
       - groups
-    if: needs.config.outputs.ready == 'true' && needs.groups.result == 'success'
+      - lanes-scope
+    if: >-
+      needs.config.outputs.ready == 'true' &&
+      needs.approve.result == 'success' &&
+      needs.groups.result == 'success' &&
+      needs.lanes-scope.outputs.run == 'true' &&
+      needs.lanes-scope.outputs.cost_centres != '[]'
     runs-on: ubuntu-latest
-    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.lanes-scope.outputs.matrix) }}
+    env:
+      TF_VAR_use_oidc: "true"
+      TF_VAR_use_cli: "false"
+      TF_VAR_tenant_id: ${{ vars.AZURE_TENANT_ID }}
+      TF_VAR_client_id: ${{ vars.AZURE_CLIENT_ID }}
+      TF_VAR_pipeline_application_id: ${{ vars.PIPELINE_APPLICATION_ID || vars.AZURE_CLIENT_ID }}
+      TF_VAR_create_release_stages: ${{ vars.CREATE_RELEASE_STAGES || 'false' }}
+      TF_VAR_currency_code: ${{ vars.POWER_PLATFORM_CURRENCY || 'GBP' }}
+      TF_VAR_name_prefix: ${{ vars.NAME_PREFIX || 'ppgov' }}
+      TF_VAR_backend_resource_group_name: ${{ vars.TF_STATE_RESOURCE_GROUP }}
+      TF_VAR_backend_storage_account_name: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+      TF_VAR_backend_container_name: ${{ vars.TF_STATE_CONTAINER }}
+      TF_VAR_cost_centre: ${{ matrix.cost_centre }}
+      POWER_PLATFORM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      POWER_PLATFORM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      POWER_PLATFORM_USE_OIDC: "true"
+      POWER_PLATFORM_LOCATION: ${{ vars.POWER_PLATFORM_LOCATION }}
+      POWER_PLATFORM_MACRO_REGION: ${{ vars.POWER_PLATFORM_MACRO_REGION }}
+      TF_IN_AUTOMATION: "true"
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+      - name: Terraform
+        uses: ./.github/actions/terraform
+        with:
+          stack: lanes
+          state_key: ${{ matrix.state_key }}
+          plan_label: ${{ matrix.plan_label }}
+          cost_centre: ${{ matrix.cost_centre }}
+          command: apply
+          azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          tf_state_resource_group: ${{ vars.TF_STATE_RESOURCE_GROUP }}
+          tf_state_storage_account: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+          tf_state_container: ${{ vars.TF_STATE_CONTAINER }}
+
+  lanes-shared:
+    name: Apply lanes shared
+    needs:
+      - config
+      - approve
+      - groups
+      - lanes-scope
+      - lanes
+    if: >-
+      needs.config.outputs.ready == 'true' &&
+      needs.approve.result == 'success' &&
+      needs.groups.result == 'success' &&
+      needs.lanes-scope.outputs.shared == 'true' &&
+      (needs.lanes.result == 'success' || needs.lanes.result == 'skipped')
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
@@ -151,6 +267,7 @@ jobs:
       TF_VAR_backend_resource_group_name: ${{ vars.TF_STATE_RESOURCE_GROUP }}
       TF_VAR_backend_storage_account_name: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
       TF_VAR_backend_container_name: ${{ vars.TF_STATE_CONTAINER }}
+      TF_VAR_cost_centre: shared
       POWER_PLATFORM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       POWER_PLATFORM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       POWER_PLATFORM_USE_OIDC: "true"
@@ -164,7 +281,9 @@ jobs:
         uses: ./.github/actions/terraform
         with:
           stack: lanes
-          state_key: lanes.tfstate
+          state_key: lanes/shared.tfstate
+          plan_label: lanes-shared
+          cost_centre: shared
           command: apply
           azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
           azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}

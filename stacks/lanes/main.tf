@@ -21,10 +21,35 @@ locals {
   # replace the environment. Two files with the same lane field fail here.
   lane_files = fileset("${path.root}/../../lanes", "**/*.yaml")
 
-  lanes = {
+  all_lanes = {
     for filename in local.lane_files :
     yamldecode(file("${path.root}/../../lanes/${filename}")).lane => yamldecode(file("${path.root}/../../lanes/${filename}"))
   }
+
+  # Same slug as modules/lane and scripts/lane_states.py.
+  lane_cost_centre_slugs = {
+    for name, lane in local.all_lanes :
+    name => trim(replace(replace(replace(lower(trimspace(lane.cost_centre)), " ", "-"), "_", "-"), "/-+/", "-"), "-")
+  }
+
+  manage_shared = var.cost_centre == "shared"
+
+  # One apply, one state. A cost centre run sees only its lanes. shared sees none
+  # of them and instead manages fan-in environments and the tier data policies.
+  lanes = local.manage_shared ? {} : {
+    for name, lane in local.all_lanes : name => lane
+    if local.lane_cost_centre_slugs[name] == var.cost_centre
+  }
+
+  # Slugs the shared state may read. "shared" is this stack's own key, not a
+  # cost centre blob. CI passes the slugs whose blobs already exist.
+  lane_state_slugs = var.lane_remote_state_slugs == null ? toset([
+    for slug in values(local.lane_cost_centre_slugs) : slug
+    if slug != "shared" && slug != ""
+    ]) : toset([
+    for slug in var.lane_remote_state_slugs : slug
+    if contains(values(local.lane_cost_centre_slugs), slug) && slug != "shared" && slug != ""
+  ])
 
   backend_configured = (
     var.backend_storage_account_name != null && var.backend_storage_account_name != "" &&
@@ -42,6 +67,18 @@ resource "terraform_data" "auth_mode" {
     precondition {
       condition     = (var.location != null && var.location != "" && (var.macro_region == null || var.macro_region == "")) || (var.macro_region != null && var.macro_region != "" && (var.location == null || var.location == ""))
       error_message = "Set exactly one of location or macro_region."
+    }
+    precondition {
+      condition     = local.manage_shared || length(local.lanes) > 0
+      error_message = "cost_centre ${var.cost_centre} matches no lane file. Refusing an empty plan, which would destroy the environments in this state. Init with key=lanes/${var.cost_centre}.tfstate and pass the matching cost_centre."
+    }
+    precondition {
+      condition     = length(local.duplicate_display_names) == 0
+      error_message = "Environment display names must stay unique per lane and stage. These collide: ${join(", ", local.duplicate_display_names)}. The name is <cost centre>-<lane>-<stage> and no longer includes the tier."
+    }
+    precondition {
+      condition     = !local.manage_shared || length(local.all_lanes) == 0 || local.backend_configured
+      error_message = "cost_centre shared reads lanes/<slug>.tfstate for data policy membership. Set backend_resource_group_name, backend_storage_account_name, and backend_container_name. A local backend cannot hold the split state keys."
     }
   }
 }
@@ -62,6 +99,23 @@ data "terraform_remote_state" "groups" {
     storage_account_name = var.backend_storage_account_name
     container_name       = var.backend_container_name
     key                  = "groups.tfstate"
+    use_oidc             = var.use_oidc
+    use_azuread_auth     = true
+  }
+}
+
+# The shared state owns the tier data policies, so it reads each cost centre
+# state for the environment ids those policies must list. Cost centre applies
+# do not read each other, and they do not read this state.
+data "terraform_remote_state" "lane_state" {
+  for_each = local.manage_shared && local.backend_configured ? local.lane_state_slugs : toset([])
+  backend  = "azurerm"
+
+  config = {
+    resource_group_name  = var.backend_resource_group_name
+    storage_account_name = var.backend_storage_account_name
+    container_name       = var.backend_container_name
+    key                  = "lanes/${each.key}.tfstate"
     use_oidc             = var.use_oidc
     use_azuread_auth     = true
   }
@@ -89,11 +143,17 @@ locals {
     if !lane.outside_group
   }
 
+  all_grouped_lanes = {
+    for name, lane in local.all_lanes : name => lane
+    if !lane.outside_group
+  }
+
   lane_tiers = toset([for lane in local.lanes : lane.tier])
 
+  # Fan-in tiers come from every lane file, and only the shared state creates them.
   shared_tiers = toset([
-    for name in toset([for lane in local.grouped_lanes : lane.tier]) : name
-    if var.create_release_stages && local.tier_by_name[name].fan_in && !local.tier_by_name[name].dedicated_prod
+    for name in toset([for lane in local.all_grouped_lanes : lane.tier]) : name
+    if local.manage_shared && var.create_release_stages && local.tier_by_name[name].fan_in && !local.tier_by_name[name].dedicated_prod
   ])
 
   dedicated_lanes = {
@@ -291,25 +351,60 @@ module "dedicated_prod" {
   environment_group_id            = local.group_ids[each.value.tier]
 }
 
-# Data policy membership comes from environments this stack manages.
+# Data policy membership comes from environments Terraform manages.
 # Do not list the tenant with powerplatform_environments. Provider 4.2.1 reads
 # Dataverse /organizations for every environment in that list, including Default,
 # and the pipeline service principal is not a user there (0x80072560).
+# Only the shared state publishes the policies. It unions ids from each
+# lanes/<cost-centre>.tfstate with the fan-in environments in this state.
 locals {
+  remote_policy_items = flatten([
+    for _, remote in data.terraform_remote_state.lane_state : concat(
+      [
+        for name, id in try(remote.outputs.dev_environment_ids, {}) : {
+          tier = local.all_lanes[name].tier
+          id   = id
+        } if contains(keys(local.all_lanes), name)
+      ],
+      [
+        for name, id in try(remote.outputs.dedicated_test_environment_ids, {}) : {
+          tier = local.all_lanes[name].tier
+          id   = id
+        } if contains(keys(local.all_lanes), name)
+      ],
+      [
+        for name, id in try(remote.outputs.dedicated_prod_environment_ids, {}) : {
+          tier = local.all_lanes[name].tier
+          id   = id
+        } if contains(keys(local.all_lanes), name)
+      ],
+    )
+  ])
+
+  local_policy_items = concat(
+    [for name, env in module.dev : { tier = local.lanes[name].tier, id = env.environment_id }],
+    [for name, env in module.dedicated_test : { tier = local.lanes[name].tier, id = env.environment_id }],
+    [for name, env in module.dedicated_prod : { tier = local.lanes[name].tier, id = env.environment_id }],
+    [for name, env in module.shared_test : { tier = name, id = env.environment_id }],
+    [for name, env in module.shared_prod : { tier = name, id = env.environment_id }],
+  )
+
+  policy_items = concat(local.remote_policy_items, local.local_policy_items)
+
+  # Keys come from the lane files. Policy ids can be unknown on the first
+  # shared apply; for_each keys cannot.
+  dlp_tiers = toset(local.manage_shared ? [for lane in local.all_lanes : lane.tier] : [])
+
   managed_environment_ids_by_tier = {
-    for tier_name in local.lane_tiers : tier_name => distinct(concat(
-      [for name, env in module.dev : env.environment_id if local.lanes[name].tier == tier_name],
-      [for name, env in module.shared_test : env.environment_id if name == tier_name],
-      [for name, env in module.shared_prod : env.environment_id if name == tier_name],
-      [for name, env in module.dedicated_test : env.environment_id if local.lanes[name].tier == tier_name],
-      [for name, env in module.dedicated_prod : env.environment_id if local.lanes[name].tier == tier_name],
-    ))
+    for tier_name in local.dlp_tiers : tier_name => distinct([
+      for item in local.policy_items : item.id if item.tier == tier_name
+    ])
   }
 }
 
 module "dlp" {
   source   = "../../modules/data-policy"
-  for_each = local.lane_tiers
+  for_each = local.dlp_tiers
 
   create                       = length(local.managed_environment_ids_by_tier[each.key]) > 0
   display_name                 = "${var.name_prefix}-tier-${each.key}"

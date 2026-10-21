@@ -13,8 +13,10 @@ terraform {
   }
 
   # Values live in backend.hcl, which is not committed.
-  # A laptop test with no storage account can switch this block to backend "local" {}
-  # and pass group_ids in terraform.tfvars. Run terraform init -reconfigure after
-  # changing the backend, and do not commit that edit.
+  # One state key per cost centre: -backend-config=key=lanes/<slug>.tfstate.
+  # Fan-in environments and tier data policies use lanes/shared.tfstate.
+  # A local backend is a single file and cannot hold those keys. Switching this
+  # block to backend "local" {} is only useful for a one-off look at one key.
+  # Run terraform init -reconfigure after changing the backend, and do not commit that edit.
   backend "azurerm" {}
 }

@@ -1,7 +1,10 @@
 resource_group_name  = "rg-REPLACE-tfstate"
 storage_account_name = "stREPLACE"
 container_name       = "tfstate"
-key                  = "lanes.tfstate"
+# One blob per cost centre, plus lanes/shared.tfstate for fan-in environments
+# and the tier data policies. Override it at init:
+#   terraform init -backend-config=backend.hcl -backend-config=key=lanes/cc-0000.tfstate
+key                  = "lanes/cc-0000.tfstate"
 use_oidc             = true
 # The state account has shared key access disabled. Entra ID auth only.
 use_azuread_auth     = true

@@ -92,6 +92,30 @@ variable "security_group_owner_object_ids" {
   default     = []
 }
 
+variable "cost_centre" {
+  type        = string
+  description = "Cost centre slug this apply manages, or shared. The state blob is lanes/<cost_centre>.tfstate. shared holds fan-in environments and the tier data policies."
+
+  validation {
+    condition     = can(regex("^[a-z0-9]+(-[a-z0-9]+)*$", var.cost_centre))
+    error_message = "cost_centre must be a lowercase slug such as cc-0000, or shared. Init with -backend-config=key=lanes/<cost_centre>.tfstate."
+  }
+}
+
+variable "lane_remote_state_slugs" {
+  type        = list(string)
+  description = "Cost centre slugs whose lanes/<slug>.tfstate blob already exists. Null reads every slug from the lane files. The shared CI job sets this after checking the container, so a new cost centre does not fail the shared plan before its blob exists."
+  default     = null
+  nullable    = true
+
+  validation {
+    condition = var.lane_remote_state_slugs == null || alltrue([
+      for slug in var.lane_remote_state_slugs : can(regex("^[a-z0-9]+(-[a-z0-9]+)*$", slug)) && slug != "shared"
+    ])
+    error_message = "lane_remote_state_slugs entries must be cost centre slugs such as cc-0000."
+  }
+}
+
 variable "create_release_stages" {
   type        = bool
   description = "Also create test and production. False keeps the first apply to dev environments only."

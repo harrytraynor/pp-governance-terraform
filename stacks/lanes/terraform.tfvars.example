@@ -18,6 +18,11 @@ pipeline_application_id = "00000000-0000-0000-0000-000000000000"
 # from the tier's release block. Read that plan before you turn it on.
 create_release_stages = false
 
+# Which lanes state this directory is applied against. cc-0000 matches the
+# example lanes (CC-0000) and the blob lanes/cc-0000.tfstate. Use shared,
+# with key lanes/shared.tfstate, for fan-in environments and tier data policies.
+cost_centre = "cc-0000"
+
 # After a local groups apply, paste `terraform output -json environment_group_ids`
 # here and keep the groups backend on local. Leave this unset when both stacks
 # use the Azure Storage backend; the lanes stack then reads groups.tfstate.
