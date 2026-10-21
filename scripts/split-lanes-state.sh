@@ -5,8 +5,13 @@
 #
 # Needs, for a real split: Azure login that can read and write the state
 # container (Storage Blob Data Contributor), Terraform, and Python 3 with
-# PyYAML. Does not need a Power Platform token or permission to change the
-# tenant.
+# PyYAML (python3 -m pip install pyyaml). lane_states.py imports PyYAML to
+# read lanes/. Without it the script stops before it edits state. Does not
+# need a Power Platform token or permission to change the tenant.
+#
+# Local state list and state rm always run in an empty directory. Terraform
+# ignores -state in a directory that has a remote backend, and state rm then
+# edits the live blob with -lock=false. Pull and push still use stacks/lanes.
 #
 # Run it once, before the first apply that uses the split keys. From a
 # checkout of the commit that introduces the split:
@@ -67,6 +72,63 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
+# Print the backend type recorded in DIR/.terraform/terraform.tfstate.
+# Empty when that file is absent.
+backend_kind() {
+  local dir="$1"
+  local meta="${dir}/.terraform/terraform.tfstate"
+  if [ ! -f "${meta}" ]; then
+    return 0
+  fi
+  python3 -c 'import json,sys; print((json.load(open(sys.argv[1], encoding="utf-8")).get("backend") or {}).get("type") or "")' "${meta}"
+}
+
+# Refuse when DIR is the working directory Terraform would use for a local
+# state list/rm/mv and that directory is bound to a remote backend.
+# A local backend still honours -state. azurerm, http, and the other remote
+# backends ignore it.
+refuse_remote_backend() {
+  local dir="$1"
+  local kind
+  kind="$(backend_kind "${dir}")"
+  if [ -n "${kind}" ] && [ "${kind}" != "local" ]; then
+    echo "Refusing to edit a local state file from ${dir}: .terraform/terraform.tfstate points at the ${kind} backend." >&2
+    echo "terraform state -state= is ignored there, and state rm would change the live state with locking off." >&2
+    return 1
+  fi
+  return 0
+}
+
+# state_edit_dir is an empty directory with no backend. local_tf always
+# -chdir's there. It also refuses when that directory, or the shell's current
+# directory if it is the one Terraform would use, has a remote backend.
+state_edit_dir=""
+
+prepare_state_edit_dir() {
+  local parent="$1"
+  state_edit_dir="${parent}/tf-edit"
+  mkdir -p "${state_edit_dir}"
+  refuse_remote_backend "${state_edit_dir}"
+}
+
+local_tf() {
+  if [ -z "${state_edit_dir}" ]; then
+    echo "Local state edits have no empty work directory." >&2
+    exit 1
+  fi
+  refuse_remote_backend "${state_edit_dir}"
+  # The shell's current directory is what Terraform uses when -chdir is omitted.
+  # Reject it when this command would run there, which is when -chdir is that
+  # same directory.
+  local edit_real current_real
+  edit_real="$(realpath "${state_edit_dir}")"
+  current_real="$(realpath "$(pwd)")"
+  if [ "${edit_real}" = "${current_real}" ]; then
+    refuse_remote_backend "${current_real}"
+  fi
+  terraform -chdir="${state_edit_dir}" "$@"
+}
+
 write_fixture() {
   local dest="$1"
   python3 - "${dest}" <<'PY'
@@ -76,15 +138,31 @@ import sys
 import uuid
 
 path = sys.argv[1]
+# Shape of the applied lanes state: two Developer lanes, two tier policies,
+# and the root data sources and tier markers that every split state keeps.
+# The catalogue data source is included so the split still drops it.
 addresses = [
     'module.dev["customer-service"].powerplatform_environment.this',
+    'module.dev["customer-service"].azuread_group.this',
+    'module.dev["customer-service"].powerplatform_application_user.pipeline',
+    'module.dev["customer-service"].data.azuread_client_config.current',
+    'module.dev["field-operations"].powerplatform_environment.this',
     'module.dev["field-operations"].azuread_group.this',
-    'module.dedicated_prod["field-operations"].powerplatform_environment.this',
+    'module.dev["field-operations"].powerplatform_application_user.pipeline',
+    'module.dev["field-operations"].data.azuread_client_config.current',
     'terraform_data.lane_rules["customer-service"]',
     'terraform_data.lane_rules["field-operations"]',
+    'module.dlp["large"].powerplatform_data_loss_prevention_policy.this[0]',
+    'module.dlp["large"].terraform_data.known_connectors[0]',
+    'module.dlp["large"].data.powerplatform_connectors.all[0]',
     'module.dlp["medium"].powerplatform_data_loss_prevention_policy.this[0]',
-    'module.shared_test["medium"].powerplatform_environment.this',
+    'module.dlp["medium"].terraform_data.known_connectors[0]',
+    'module.dlp["medium"].data.powerplatform_connectors.all[0]',
+    'module.tier["sandbox.yaml"].terraform_data.tier',
+    'module.tier["small.yaml"].terraform_data.tier',
     'module.tier["medium.yaml"].terraform_data.tier',
+    'module.tier["large.yaml"].terraform_data.tier',
+    'module.tier["exception.yaml"].terraform_data.tier',
     "terraform_data.auth_mode",
     "data.azuread_client_config.caller",
     "data.terraform_remote_state.groups[0]",
@@ -92,10 +170,10 @@ addresses = [
     "terraform_data.display_names",
 ]
 pattern = re.compile(
-    r"^(?:(?P<data>data)\.)?"
-    r"(?:module\.(?P<modname>[A-Za-z0-9_-]+)(?:\[\"(?P<modkey>(?:\\.|[^\"\\])*)\"\])?\.)?"
+    r"^(?:module\.(?P<modname>[A-Za-z0-9_-]+)(?:\[\"(?P<modkey>[^\"]*)\"\])?\.)?"
+    r"(?:(?P<data>data)\.)?"
     r"(?P<type>[A-Za-z0-9_]+)\.(?P<name>[A-Za-z0-9_]+)"
-    r"(?:\[(?P<index>(?:\"(?:\\.|[^\"\\])*\")|(?:[0-9]+))\])?$"
+    r"(?:\[(?P<index>(?:\"[^\"]*\")|(?:[0-9]+))\])?$"
 )
 blocks = {}
 order = []
@@ -157,8 +235,10 @@ split_state() {
   local work="$2"
   local addresses="${work}/addresses.txt"
   local classification
+  source="$(realpath "${source}")"
+  prepare_state_edit_dir "${work}"
 
-  terraform state list -state="${source}" > "${addresses}"
+  local_tf state list -state="${source}" > "${addresses}"
   classification="$(python3 "${root}/scripts/lane_states.py" --root "${root}" classify --addresses "${addresses}")"
   python3 - "${classification}" <<'PY'
 import json, sys
@@ -197,8 +277,9 @@ PY
 )
     if [ "${#remove[@]}" -gt 0 ]; then
       local start=0
+      dest="$(realpath "${dest}")"
       while [ "${start}" -lt "${#remove[@]}" ]; do
-        terraform state rm -lock=false -state="${dest}" "${remove[@]:start:20}" >/dev/null
+        local_tf state rm -lock=false -state="${dest}" "${remove[@]:start:20}" >/dev/null
         start=$((start + 20))
       done
     fi
@@ -211,16 +292,22 @@ data["lineage"] = str(uuid.uuid4())
 with open(path, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
-    echo "Built ${target}: $(terraform state list -state="${dest}" | wc -l | tr -d ' ') addresses"
+    echo "Built ${target}: $(local_tf state list -state="$(realpath "${dest}")" | wc -l | tr -d ' ') addresses"
   done < <(python3 -c 'import json,sys; print("\n".join(sorted(json.loads(sys.argv[1])["targets"])))' "${classification}")
+}
+
+list_state() {
+  local_tf state list -state="$(realpath "$1")"
 }
 
 assert_contains() {
   local file="$1"
   local needle="$2"
-  if ! terraform state list -state="${file}" | grep -Fxq "${needle}"; then
+  local listed
+  listed="$(list_state "${file}")"
+  if ! printf '%s\n' "${listed}" | grep -Fxq "${needle}"; then
     echo "self-test failed: ${file} is missing ${needle}" >&2
-    terraform state list -state="${file}" >&2 || true
+    printf '%s\n' "${listed}" >&2
     exit 1
   fi
 }
@@ -228,33 +315,138 @@ assert_contains() {
 assert_absent() {
   local file="$1"
   local needle="$2"
-  if terraform state list -state="${file}" | grep -Fxq "${needle}"; then
+  local listed
+  listed="$(list_state "${file}")"
+  if printf '%s\n' "${listed}" | grep -Fxq "${needle}"; then
     echo "self-test failed: ${file} still has ${needle}" >&2
     exit 1
   fi
 }
 
+assert_count() {
+  local file="$1"
+  local want="$2"
+  local got
+  got="$(list_state "${file}" | wc -l | tr -d ' ')"
+  if [ "${got}" != "${want}" ]; then
+    echo "self-test failed: ${file} has ${got} addresses, expected ${want}" >&2
+    list_state "${file}" >&2 || true
+    exit 1
+  fi
+}
+
 if [ "${mode}" = "self-test" ]; then
-  work="$(mktemp -d)"
-  trap 'rm -rf "${work}"' EXIT
+  base="$(mktemp -d)"
+  trap 'rm -rf "${base}"' EXIT
+  # An initialised remote backend. terraform state -state= in this directory
+  # talks to the backend and ignores the file. retry_max 0 keeps the refusal fast.
+  remote="${base}/remote"
+  work="${base}/work"
+  mkdir -p "${remote}" "${work}"
+  cat > "${remote}/main.tf" <<'EOF'
+terraform {
+  backend "http" {
+    address   = "http://127.0.0.1:9/split-lanes-self-test"
+    retry_max = 0
+  }
+}
+EOF
+  (
+    cd "${remote}"
+    terraform init -input=false -no-color >/dev/null 2>&1 || true
+  )
+  if [ ! -f "${remote}/.terraform/terraform.tfstate" ]; then
+    echo "self-test failed: could not initialise a remote backend directory" >&2
+    exit 1
+  fi
+  if refuse_remote_backend "${remote}" 2>/dev/null; then
+    echo "self-test failed: guard allowed an initialised remote backend" >&2
+    exit 1
+  fi
+  meta_before="$(cksum "${remote}/.terraform/terraform.tfstate")"
+  printf 'do-not-touch\n' > "${remote}/decoy.tfstate"
+  decoy_before="$(cksum "${remote}/decoy.tfstate")"
+
   write_fixture "${work}/original.tfstate"
-  split_state "${work}/original.tfstate" "${work}"
+  # Run the split with this remote directory as the shell's current directory,
+  # which is how a dry run from stacks/lanes behaves.
+  (
+    cd "${remote}"
+    split_state "${work}/original.tfstate" "${work}"
+  )
+  # split_state sets state_edit_dir in a subshell. Point asserts at the same directory.
+  state_edit_dir="${work}/tf-edit"
   cc="${work}/cc-0000.tfstate"
   shared="${work}/shared.tfstate"
-  assert_contains "${cc}" 'module.dev["customer-service"].powerplatform_environment.this'
-  assert_contains "${cc}" 'module.dev["field-operations"].azuread_group.this'
-  assert_contains "${cc}" 'module.dedicated_prod["field-operations"].powerplatform_environment.this'
-  assert_contains "${cc}" 'terraform_data.lane_rules["customer-service"]'
-  assert_contains "${cc}" "terraform_data.auth_mode"
-  assert_contains "${cc}" 'module.tier["medium.yaml"].terraform_data.tier'
-  assert_absent "${cc}" 'module.dlp["medium"].powerplatform_data_loss_prevention_policy.this[0]'
+  assert_count "${cc}" 18
+  assert_count "${shared}" 14
+  for lane in customer-service field-operations; do
+    assert_contains "${cc}" "module.dev[\"${lane}\"].powerplatform_environment.this"
+    assert_contains "${cc}" "module.dev[\"${lane}\"].azuread_group.this"
+    assert_contains "${cc}" "module.dev[\"${lane}\"].powerplatform_application_user.pipeline"
+    assert_contains "${cc}" "module.dev[\"${lane}\"].data.azuread_client_config.current"
+    assert_contains "${cc}" "terraform_data.lane_rules[\"${lane}\"]"
+    assert_absent "${shared}" "module.dev[\"${lane}\"].powerplatform_environment.this"
+    assert_absent "${shared}" "module.dev[\"${lane}\"].azuread_group.this"
+  done
+  for tier in large medium; do
+    assert_contains "${shared}" "module.dlp[\"${tier}\"].powerplatform_data_loss_prevention_policy.this[0]"
+    assert_contains "${shared}" "module.dlp[\"${tier}\"].terraform_data.known_connectors[0]"
+    assert_contains "${shared}" "module.dlp[\"${tier}\"].data.powerplatform_connectors.all[0]"
+    assert_absent "${cc}" "module.dlp[\"${tier}\"].powerplatform_data_loss_prevention_policy.this[0]"
+  done
+  for copied in \
+    "data.azuread_client_config.caller" \
+    "data.terraform_remote_state.groups[0]" \
+    "terraform_data.auth_mode" \
+    'module.tier["sandbox.yaml"].terraform_data.tier' \
+    'module.tier["small.yaml"].terraform_data.tier' \
+    'module.tier["medium.yaml"].terraform_data.tier' \
+    'module.tier["large.yaml"].terraform_data.tier' \
+    'module.tier["exception.yaml"].terraform_data.tier'
+  do
+    assert_contains "${cc}" "${copied}"
+    assert_contains "${shared}" "${copied}"
+  done
   assert_absent "${cc}" "data.powerplatform_environments.catalogue[0]"
-  assert_absent "${cc}" "terraform_data.display_names"
-  assert_contains "${shared}" 'module.dlp["medium"].powerplatform_data_loss_prevention_policy.this[0]'
-  assert_contains "${shared}" 'module.shared_test["medium"].powerplatform_environment.this'
-  assert_contains "${shared}" "terraform_data.auth_mode"
-  assert_absent "${shared}" 'module.dev["customer-service"].powerplatform_environment.this'
   assert_absent "${shared}" "data.powerplatform_environments.catalogue[0]"
+  assert_absent "${cc}" "terraform_data.display_names"
+  assert_absent "${shared}" "terraform_data.display_names"
+
+  if [ "$(cksum "${remote}/.terraform/terraform.tfstate")" != "${meta_before}" ]; then
+    echo "self-test failed: the initialised backend metadata changed" >&2
+    exit 1
+  fi
+  if [ "$(cksum "${remote}/decoy.tfstate")" != "${decoy_before}" ]; then
+    echo "self-test failed: a state file in the initialised directory changed" >&2
+    exit 1
+  fi
+  # The guard must fail before Terraform runs, so this does not touch the backend.
+  if (
+    cd "${remote}"
+    state_edit_dir="${remote}"
+    local_tf state list -state="${work}/original.tfstate"
+  ) > "${base}/guard-out.txt" 2> "${base}/guard-err.txt"; then
+    echo "self-test failed: local_tf ran inside the initialised directory" >&2
+    exit 1
+  fi
+  if ! grep -q "Refusing to edit a local state file" "${base}/guard-err.txt"; then
+    echo "self-test failed: the guard did not refuse before Terraform ran" >&2
+    cat "${base}/guard-err.txt" >&2 || true
+    exit 1
+  fi
+  # And Terraform itself, run in that directory, does not read -state.
+  if (
+    cd "${remote}"
+    terraform state list -state="${work}/original.tfstate" > "${base}/raw-list.txt" 2> "${base}/raw-err.txt"
+  ); then
+    echo "self-test failed: terraform state list -state= succeeded in a remote backend directory" >&2
+    exit 1
+  fi
+  if grep -q 'powerplatform_environment' "${base}/raw-list.txt"; then
+    echo "self-test failed: the remote directory listed the local state file" >&2
+    exit 1
+  fi
   echo "split-lanes-state self-test passed"
   exit 0
 fi

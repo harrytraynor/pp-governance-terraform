@@ -154,6 +154,8 @@ moved {
 # Count addresses it as [0]. Without this move, Terraform would destroy the
 # group and create a new one. Memberships stay at azuread_group_member.member["<object id>"],
 # so a Sandbox or Production lane does not lose or recreate them either.
+# A Developer lane sets count to 0, so this[0] is out of range and the group
+# is destroyed. The move does not keep it.
 moved {
   from = azuread_group.this
   to   = azuread_group.this[0]

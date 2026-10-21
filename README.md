@@ -41,7 +41,7 @@ You need:
 
 - Terraform 1.6 or newer. The workflows pin 1.16.6.
 - Azure CLI, for the local sign-in and for `scripts/bootstrap-state.sh`.
-- Python 3 with PyYAML (`python3 -m pip install pyyaml`), for `scripts/check-lanes.py`.
+- Python 3 with PyYAML (`python3 -m pip install pyyaml`), for `scripts/check-lanes.py` and `scripts/split-lanes-state.sh`. The state split reads every lane file. Without PyYAML it stops before it edits state.
 - A Power Platform dev or test tenant with a licence that covers managed environments. Environment groups require managed environments. Each Sandbox environment with Dataverse also needs at least 1 GB of free **paid** Dataverse database capacity. Developer, viral trial, and M365 E5 developer licences add none, and the create fails with HTTP 409 `InsufficientCapacity_StorageDriven`.
 - An Azure subscription for the Terraform state storage account, if you use the `azurerm` backend. A first local plan can use the local backend instead. See below.
 
@@ -233,7 +233,9 @@ If the shared data policy plan fails because an environment id is still unknown,
 
 Do this once when the storage account already has `lanes.tfstate` from the unsplit stack. Do it before the first apply that uses `lanes/<slug>.tfstate`. CI refuses to plan or apply a new key while `lanes.tfstate` exists and the target blob does not, so an empty state cannot create a second copy of the environments.
 
-The script needs an Azure login with **Storage Blob Data Contributor** on the state account, Terraform, and Python 3 with PyYAML. It does not need a Power Platform token, and it does not refresh, plan, or apply.
+The script needs an Azure login with **Storage Blob Data Contributor** on the state account, Terraform, and Python 3 with PyYAML (`python3 -m pip install pyyaml`). PyYAML is a dependency: `scripts/lane_states.py` imports it to classify addresses. It does not need a Power Platform token, and it does not refresh, plan, or apply.
+
+Run it from `stacks/lanes` after that directory has been initialised. Local `terraform state list` and `terraform state rm -state=` commands do not run there. Terraform ignores `-state` in a directory whose backend is remote, and `state rm` would then edit the live blob with locking off. The script runs those commands with `-chdir` pointed at an empty directory that has no backend. It refuses to run them if that directory, or the directory it would use as its current directory, has `.terraform/terraform.tfstate` pointing at a remote backend.
 
 ```bash
 az login
@@ -253,7 +255,7 @@ What it does:
 5. Drops the tenant-wide environment catalogue data source. That data source is not an environment.
 6. Deletes the old `lanes.tfstate` blob after the new blobs are uploaded.
 
-`--dry-run` still reads the blob. It does not upload or delete. `--self-test` splits a fixture on the laptop and does not talk to Azure. The script stops if it finds a resource address it does not recognise, and it refuses an empty source state.
+`--dry-run` still reads the blob. It does not upload or delete. `--self-test` splits a fixture on the laptop, starting from a directory that has been initialised with a remote backend, and does not talk to Azure. The script stops if it finds a resource address it does not recognise, and it refuses an empty source state.
 
 Then plan `lanes/cc-0000.tfstate` and `lanes/shared.tfstate` before you apply either. Environments must not be created or destroyed by the move itself. Apply the cost centre state first, then the shared state.
 
