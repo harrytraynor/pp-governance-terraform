@@ -68,9 +68,12 @@ resource "powerplatform_environment" "this" {
   dataverse = {
     language_code = var.language_code
     currency_code = var.currency_code
-    # Developer has no lane group. one() is null when count is 0, and the
-    # group id when a Sandbox or Production lane created azuread_group.this[0].
-    security_group_id = one(azuread_group.this[*].object_id)
+    # Developer stays null. Do not read azuread_group here: a count of 0 makes
+    # that id unknown while the group is destroyed, and the provider would plan
+    # security_group_id as known after apply on the environment update.
+    # Sandbox and Production take the lane group. one() is null only if the
+    # group was not created, which those types do not allow.
+    security_group_id = var.environment_type == "Developer" ? null : one(azuread_group.this[*].object_id)
   }
 
   timeouts = {

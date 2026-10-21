@@ -58,6 +58,10 @@ resource "terraform_data" "auth_mode" {
   }
 }
 
+# Same tenant-wide read as the old lanes catalogue. It stays off unless
+# manage_default_environment_dlp is true. Turning it on reads Dataverse for
+# every environment, including Default, and fails when the pipeline principal
+# is not a member of that organization (0x80072560).
 data "powerplatform_environments" "all" {
   count = var.manage_default_environment_dlp ? 1 : 0
 }
