@@ -15,6 +15,7 @@ terraform.rc
 backend.hcl
 plan.txt
 plan-*.txt
+plan-*.json
 tfplan
 *.tfplan
 *.tfplan.json

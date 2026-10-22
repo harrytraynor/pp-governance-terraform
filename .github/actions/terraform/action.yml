@@ -169,7 +169,8 @@ runs:
             ;;
           drift)
             set +e
-            terraform plan -input=false -no-color -lock-timeout=5m -detailed-exitcode | tee "${outfile}"
+            # -out keeps the binary plan. Exit 2 still means the plan has changes.
+            terraform plan -input=false -no-color -lock-timeout=5m -detailed-exitcode -out=tfplan | tee "${outfile}"
             code=${PIPESTATUS[0]}
             set -e
             ;;
@@ -179,6 +180,10 @@ runs:
             ;;
         esac
         echo "exit_code=${code}" >> "${GITHUB_OUTPUT}"
+        # Write the exit code before show. A failed show must not look like a clean plan.
+        if [ "${COMMAND}" = "drift" ] && [ "${code}" -eq 2 ]; then
+          terraform show -json tfplan > "${GITHUB_WORKSPACE}/plan-${label}.json"
+        fi
         if [ "${COMMAND}" = "drift" ] && { [ "${code}" -eq 0 ] || [ "${code}" -eq 2 ]; }; then
           exit 0
         fi

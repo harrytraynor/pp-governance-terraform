@@ -9,6 +9,7 @@ if ! python3 -c "import yaml" >/dev/null 2>&1; then
 fi
 
 python3 "${root}/scripts/lane_states.py" --self-test
+python3 "${root}/scripts/classify_drift.py" --self-test
 bash "${root}/scripts/split-lanes-state.sh" --self-test
 python3 "${root}/scripts/check-lanes.py" --self-test
 python3 "${root}/scripts/check-lanes.py" --root "${root}"
