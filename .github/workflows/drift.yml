@@ -111,6 +111,17 @@ jobs:
           tf_state_storage_account: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
           tf_state_container: ${{ vars.TF_STATE_CONTAINER }}
 
+      - name: Classify the plan
+        id: classify
+        if: steps.terraform.outcome == 'success' && steps.terraform.outputs.exit_code == '2'
+        env:
+          PLAN_LABEL: ${{ matrix.plan_label }}
+        run: |
+          python3 scripts/classify_drift.py \
+            --plan "${GITHUB_WORKSPACE}/plan-${PLAN_LABEL}.json" \
+            --plan-label "${PLAN_LABEL}" \
+            --github-output "${GITHUB_OUTPUT}"
+
       - name: Open or close a drift issue
         if: always() && steps.terraform.outcome != 'cancelled'
         uses: actions/github-script@v7
@@ -119,6 +130,7 @@ jobs:
             const fs = require('fs');
             const label = '${{ matrix.plan_label }}';
             const code = Number('${{ steps.terraform.outputs.exit_code }}');
+            const driftClass = '${{ steps.classify.outputs.drift_class }}';
             const title = `Drift in stacks/${label}`;
             const owner = context.repo.owner;
             const repo = context.repo.repo;
@@ -146,6 +158,11 @@ jobs:
             }
             if (code !== 2) {
               core.setFailed(`Terraform plan exited ${code}. An exit code of 2 is drift. Anything else is a failed plan.`);
+              return;
+            }
+            if (driftClass === 'benign') {
+              // Catalogue connectors added to blocked_connectors are already blocked.
+              // Leave any open issue as it is. Exit 0 above is what closes one.
               return;
             }
             const path = `${process.env.GITHUB_WORKSPACE}/plan-${label}.txt`;
@@ -238,6 +255,17 @@ jobs:
           tf_state_storage_account: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
           tf_state_container: ${{ vars.TF_STATE_CONTAINER }}
 
+      - name: Classify the plan
+        id: classify
+        if: steps.terraform.outcome == 'success' && steps.terraform.outputs.exit_code == '2'
+        env:
+          PLAN_LABEL: ${{ matrix.plan_label }}
+        run: |
+          python3 scripts/classify_drift.py \
+            --plan "${GITHUB_WORKSPACE}/plan-${PLAN_LABEL}.json" \
+            --plan-label "${PLAN_LABEL}" \
+            --github-output "${GITHUB_OUTPUT}"
+
       - name: Open or close a drift issue
         if: always() && steps.terraform.outcome != 'cancelled'
         uses: actions/github-script@v7
@@ -246,6 +274,7 @@ jobs:
             const fs = require('fs');
             const label = '${{ matrix.plan_label }}';
             const code = Number('${{ steps.terraform.outputs.exit_code }}');
+            const driftClass = '${{ steps.classify.outputs.drift_class }}';
             const title = `Drift in stacks/${label}`;
             const owner = context.repo.owner;
             const repo = context.repo.repo;
@@ -273,6 +302,11 @@ jobs:
             }
             if (code !== 2) {
               core.setFailed(`Terraform plan exited ${code}. An exit code of 2 is drift. Anything else is a failed plan.`);
+              return;
+            }
+            if (driftClass === 'benign') {
+              // Catalogue connectors added to blocked_connectors are already blocked.
+              // Leave any open issue as it is. Exit 0 above is what closes one.
               return;
             }
             const path = `${process.env.GITHUB_WORKSPACE}/plan-${label}.txt`;
@@ -358,6 +392,17 @@ jobs:
           tf_state_storage_account: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
           tf_state_container: ${{ vars.TF_STATE_CONTAINER }}
 
+      - name: Classify the plan
+        id: classify
+        if: steps.terraform.outcome == 'success' && steps.terraform.outputs.exit_code == '2'
+        env:
+          PLAN_LABEL: lanes-shared
+        run: |
+          python3 scripts/classify_drift.py \
+            --plan "${GITHUB_WORKSPACE}/plan-${PLAN_LABEL}.json" \
+            --plan-label "${PLAN_LABEL}" \
+            --github-output "${GITHUB_OUTPUT}"
+
       - name: Open or close a drift issue
         if: always() && steps.terraform.outcome != 'cancelled'
         uses: actions/github-script@v7
@@ -366,6 +411,7 @@ jobs:
             const fs = require('fs');
             const label = 'lanes-shared';
             const code = Number('${{ steps.terraform.outputs.exit_code }}');
+            const driftClass = '${{ steps.classify.outputs.drift_class }}';
             const title = `Drift in stacks/${label}`;
             const owner = context.repo.owner;
             const repo = context.repo.repo;
@@ -393,6 +439,11 @@ jobs:
             }
             if (code !== 2) {
               core.setFailed(`Terraform plan exited ${code}. An exit code of 2 is drift. Anything else is a failed plan.`);
+              return;
+            }
+            if (driftClass === 'benign') {
+              // Catalogue connectors added to blocked_connectors are already blocked.
+              // Leave any open issue as it is. Exit 0 above is what closes one.
               return;
             }
             const path = `${process.env.GITHUB_WORKSPACE}/plan-${label}.txt`;
