@@ -1,6 +1,6 @@
 # Power Platform governance with Terraform
 
-Companion example for Harry Traynor's post "How far can Terraform take Power Platform governance?". Clone it and plan it against a Power Platform dev or test tenant. It is an experiment in putting tier rules, lane requests, and tenant baselines in files that Terraform can plan before anything changes.
+Companion example for Harry Traynor's post "Governance you can diff". Clone it and plan it against a Power Platform dev or test tenant. It is an experiment in putting tier rules, lane requests, and tenant baselines in files that Terraform can plan before anything changes.
 
 The shape of the model (tiers, lanes, firm checks, and state split by blast radius) is inspired by Simon Owen's work at EmPOWER Your World. Credit:
 
@@ -112,7 +112,7 @@ python3 -m pip install pyyaml
 python3 scripts/check-lanes.py
 ```
 
-Firm failures exit 1. Access and complexity warnings print and exit 0. The lanes stack repeats the firm rules as Terraform preconditions, so a plan still fails closed if you skip the script.
+Firm failures exit 1. Access and complexity warnings print and exit 0. The lanes stack repeats the firm rules it can express as Terraform preconditions. A past `exception_expires_on` fails this script and does not fail the plan.
 
 ### 2. Pick a backend
 
@@ -225,7 +225,7 @@ terraform apply
 
 `create_release_stages` defaults to false. Set it to true only after you have read the plan that adds test and production. Dedicated test and production stay in the cost centre state. Fan-in test and production (`shared-all-lanes-test`, `shared-all-lanes-prod`) are created by the shared state.
 
-Environment create timeouts are 90 minutes. The first apply is also the test of two things this repository cannot prove offline: service principal calls to `powerplatform_environment`, and creating the environment already inside a group via `environment_group_id`. Watch that apply.
+Environment create timeouts are 90 minutes. Service principal calls to `powerplatform_environment`, and creating the environment already inside a group via `environment_group_id`, have been applied to the dev tenant HTD3V through this repository's GitHub Actions workflows, and the plan came back clean. Watch the apply on your own tenant.
 
 If the shared data policy plan fails because an environment id is still unknown, apply the cost centre state first, then plan shared again.
 
@@ -415,9 +415,9 @@ Large and exception also set an advanced connector allow-list on the group. Data
 
 Data policies are cumulative. A connector blocked by any policy that covers an environment stays blocked.
 
-Sandbox, large, and exception are marked `firm: true`. Exception expiry is firm: the script and the Terraform precondition both refuse a missing or past date. Access and complexity mismatches are warnings.
+Sandbox, large, and exception are marked `firm: true`. Exception expiry is firm in `scripts/check-lanes.py`: a missing date and a date in the past both fail. The Terraform precondition only checks that `exception_expires_on` is set. It does not reject a date in the past. Access and complexity mismatches are warnings.
 
-`.github/CODEOWNERS` documents who should review a change (platform, the business owner, and security for large, exception, tiers, and tenant). The lines are commented out so this example does not assign owners that do not exist. Uncomment and replace them when the repository has real teams.
+CODEOWNERS review is recommended best practice. `.github/CODEOWNERS` documents who should review a change (platform, the business owner, and security for large, exception, tiers, and tenant). This demo does not implement that: the rules are commented out, so the file assigns nobody. Uncomment and replace them when the repository has real teams.
 
 ## Known limitations
 
@@ -432,8 +432,8 @@ Checked against provider **4.2.1**. Where the provider has no resource, this rep
 - Copilot Studio Application Insights integration is preview. It is not used.
 - Agent 365 is out of scope.
 - `powerplatform_environment_settings` (audit, IP firewall, and similar) is not wired up. It is easy to lock a tenant with it.
-- The provider markdown for `powerplatform_environment` still says service principal authentication is not supported. The 4.2.1 resource code has no runtime check behind that sentence. The first real apply is the confirmation. The service principal limitation on `powerplatform_environment_group_rule_set` was removed in 4.2.0.
-- Creating an environment with `environment_group_id` already set is the path this example uses, and it was untested against a live tenant when the files were written. Confirm the environment lands in the group and is managed.
+- The provider markdown for `powerplatform_environment` still says service principal authentication is not supported. The 4.2.1 resource code has no runtime check behind that sentence. An apply to the dev tenant HTD3V through this repository's GitHub Actions workflows confirmed it, and the plan came back clean. The service principal limitation on `powerplatform_environment_group_rule_set` was removed in 4.2.0.
+- Creating an environment with `environment_group_id` already set is the path this example uses. It has been applied to the dev tenant HTD3V through this repository's GitHub Actions workflows, and the plan came back clean. On your own tenant, confirm the environment lands in the group and is managed.
 - Provider docs say `share_max_limit` must be `-1` when share mode is `no limit`. The 4.2.1 validator requires null instead. This repository sends null. Docs also say solution checker mode `warm`. The validator accepts `warn`.
 - Do not set `environment_group_id` to the empty guid. Provider 4.2.1 treated that as group membership, after which managed-environment settings could not apply. Null omits the attribute.
 - An empty `member_object_ids` list means nobody is in a Sandbox or Production lane security group. A Developer lane has no lane group, and `dev_security_group_ids` is null for that lane. If Dataverse refuses the pipeline caller, set `pipeline_security_group_object_id` to the enterprise application **object** id so it is added as a member of each Sandbox or Production lane group.
@@ -449,7 +449,7 @@ Checked against provider **4.2.1**. Where the provider has no resource, this rep
 This repo is a learning example that goes with a blog post. It has been applied to a real dev tenant, but it isn't hardened for production, so review the points below before adapting it.
 
 1. **One highly privileged identity.** The single app registration is a Power Platform Administrator and also has Microsoft Graph permission to create groups. Anyone who can get a token for it can change governance across the whole tenant. Split the work: a narrow identity for group creation, a separate identity for Power Platform changes, and the smallest role that can still do each job.
-2. **Pull request plans run as that admin identity.** The `pull_request` federated credential lets any branch in this repository, once it has an open pull request, obtain an admin token during plan. Providers and external data sources can run code during a plan. Use a separate read-only identity for plan, and keep the admin credential on the `production` GitHub environment only.
+2. **Pull request plans run as that admin identity.** The `pull_request` federated credential lets any branch in this repository, once it has an open pull request, obtain an admin token during plan. Providers and external data sources can run code during a plan. A separate read-only identity for plan, with the admin credential kept on the `production` GitHub environment only, is recommended best practice. This demo does not implement that split. Plan and apply both use the one `AZURE_CLIENT_ID`.
 3. **One approval, then the main-branch credential.** `apply.yml` asks for the `production` environment once, on the `approve` job. Tenant, groups, and every lanes state wait for that job. Apply jobs authenticate as `repo:ORG/REPO:ref:refs/heads/main`. Add required reviewers on `production`, and limit that environment to `main`. This repository does not configure those rules. Without them the environment name is only a label, and a push to `main` applies as soon as the workflow starts.
 4. **Protect `main`.** Require a pull request review and the passing checks, and block force pushes. A push to `main` runs apply, so it has the same reach as the tenant admin identity.
 5. **State storage.** Terraform state can hold environment ids, Dataverse URLs, and group object ids. `scripts/bootstrap-state.sh` now disables shared key access and enables blob versioning and soft delete (14 days for blobs and containers). It also sets TLS 1.2, HTTPS only, and no public blob access, then grants **Storage Blob Data Contributor** on the whole account to the pipeline service principal and, when set, one user. The backend examples and CI set `use_azuread_auth = true` so Terraform uses Entra ID. The role is still read and write on the whole account. Narrow it to named admins if more people should not read state.
